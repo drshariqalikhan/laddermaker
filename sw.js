@@ -1,5 +1,5 @@
 // sw.js
-const CACHE_NAME = 'sgs-live-v1';
+const CACHE_NAME = 'sgs-live-v2';
 const ASSETS = [
   '/',
   'https://jsdelivr.net',
@@ -7,13 +7,14 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(
-    caches.open(CACHE_NAME).then(c => c.addAll(ASSETS))
-  );
+  e.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll(ASSETS)));
 });
 
 self.addEventListener('fetch', e => {
-  e.respondWith(
-    caches.match(e.request).then(res => res || fetch(e.request))
-  );
+  // Only intercept requests targeting our local server endpoints
+  if (e.request.url.startsWith(self.location.origin)) {
+    e.respondWith(
+      caches.match(e.request).then(res => res || fetch(e.request))
+    );
+  }
 });
