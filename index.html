@@ -23,12 +23,10 @@
   <section class="section">
     <div class="container">
       
-      <!-- Interactive Parameter Controller Box -->
       <div class="box mb-5">
         <h2 class="title is-4 mb-4"><i class="fas fa-sliders-h text-grey mr-2"></i>Query Parameter Control</h2>
         
         <div class="columns is-desktop">
-          <!-- Calendar Type Parameter Matrix -->
           <div class="column is-4">
             <div class="field">
               <label class="label">Target Instrument Calendar</label>
@@ -48,7 +46,6 @@
             </div>
           </div>
 
-          <!-- Date Filters -->
           <div class="column is-4">
             <div class="field">
               <label class="label">Start Issuance Date</label>
@@ -68,11 +65,10 @@
         </div>
       </div>
 
-      <!-- JSON Viewer Shell -->
       <div class="box">
         <div class="is-flex is-justify-content-between is-align-items-center mb-3">
           <h3 class="title is-4 mb-0"><i class="fas fa-terminal text-grey mr-2"></i>Live JSON Response Payload</h3>
-          <span class="tag is-info is-light id-hidden" id="loading-spinner">
+          <span class="tag is-info is-light is-hidden" id="loading-spinner">
             <i class="fas fa-spinner fa-pulse mr-1"></i> Running Proxy Fetch Task...
           </span>
         </div>
@@ -88,7 +84,6 @@
   </section>
 
   <script>
-    // Async execution handler connecting frontend inputs with serverless backend proxy
     async function inspectQueryData() {
       const display = document.getElementById('json-display');
       const spinner = document.getElementById('loading-spinner');
@@ -113,7 +108,6 @@
         if (!response.ok) throw new Error(`HTTP Error Status: ${response.status}`);
         const data = await response.json();
         
-        // Print formatted structural output inside the HTML pre container code space block
         display.textContent = JSON.stringify(data, null, 2);
       } catch (err) {
         display.textContent = JSON.stringify({
@@ -126,7 +120,6 @@
       }
     }
 
-    // Dynamic Standalone PWA Manifest Configuration Asset Mapping
     const manifest = {
       "short_name": "MASInspector",
       "name": "MAS API v1 Realtime Data Inspector Studio",
@@ -139,7 +132,6 @@
     const manifestBlob = new Blob([JSON.stringify(manifest)], {type: 'application/json'});
     document.getElementById('manifest-placeholder').setAttribute('href', URL.createObjectURL(manifestBlob));
 
-    // Register PWA service worker referencing standalone physical script architecture 
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW setup skipped.', err));
