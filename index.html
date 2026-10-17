@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live SGS Bond Curve PWA</title>
+  <link rel="stylesheet" href="https://jsdelivr.net">
+  <link rel="stylesheet" href="https://cloudflare.com">
+  <link rel="manifest" id="manifest-placeholder">
+</head>
+<body class="has-background-light" style="min-height: 100vh;">
+
+  <nav class="navbar is-dark">
+    <div class="container">
+      <div class="navbar-brand">
+        <a class="navbar-item" href="#">
+          <i class="fas fa-satellite-dish mr-2 text-info"></i>
+          <strong>Live SG Bond Curve PWA</strong>
+        </a>
+        <button class="button is-success is-small align-self-center ml-auto mr-3 is-hidden" id="installBtn">
+          <i class="fas fa-download mr-1"></i> Install App
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <section class="section">
+    <div class="container">
+      
+      <!-- Network Connectivity and Error Alerts -->
+      <div id="offline-banner" class="notification is-warning is-light is-hidden mb-4">
+        <i class="fas fa-wifi-slash mr-2"></i> Offline mode active. Utilizing cached yield assets.
+      </div>
+      <div id="error-banner" class="notification is-danger is-light is-hidden mb-4">
+        <i class="fas fa-exclamation-triangle mr-2"></i> <span id="error-msg">Failed to grab current yields.</span>
+      </div>
+
+      <!-- Main Info Display -->
+      <div class="card mb-5">
+        <div class="card-content">
+          <div class="columns is-vcentered">
+            <div class="column">
+              <h1 class="title is-3">Singapore Government Securities (SGS)</h1>
+              <p class="subtitle is-6 text-muted">Real-Time Yield Curve (Updated: <span id="data-date">Fetching...</span>)</p>
+            </div>
+            <div class="column is-narrow text-right-tablet">
+              <span class="tag is-success is-medium">Status: Live Data Feed</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Yields Table Container -->
+      <div class="box">
+        <div class="table-container">
+          <table class="table is-striped is-hoverable is-fullwidth">
+            <thead>
+              <tr>
+                <th>Benchmark Issue</th>
+                <th>Maturity</th>
+                <th class="has-text-right">Live Yield (% p.a.)</th>
+              </tr>
+            </thead>
+            <tbody id="yield-table-body">
+              <tr>
+                <td colspan="3" class="has-text-centered py-6">
+                  <i class="fas fa-spinner fa-pulse fa-2x text-grey-light"></i>
+                  <p class="mt-2 text-grey">Contacting MAS Data Servers...</p>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <script>
+    // 1. Core Async Fetch Request to your Vercel Proxy Route
+    async function loadRealBondData() {
+      const tbody = document.getElementById('yield-table-body');
+      const dateEl = document.getElementById('data-date');
+      const errorBanner = document.getElementById('error-banner');
+
+      try {
+        const response = await fetch('/api/bonds');
+        if (!response.ok) throw new Error('Proxy server returned bad status code.');
+        
+        const data = await response.json();
+        
+        // Render updated date timestamp
+        dateEl.textContent = data.date || 'Current Session';
+        
+        // Inject structural matrix cleanly into Bulma UI code
+        tbody.innerHTML = data.curve.map(row => `
+          <tr>
+            <td><code class="has-text-grey-dark">${row.code}</code></td>
+            <td><strong>${row.maturity}</strong></td>
+            <td class="has-text-right has-text-weight-bold has-text-link">
+              ${row.yield > 0 ? row.yield.toFixed(2) + '%' : 'N/A'}
+            </td>
+          </tr>
+        `).join('');
+
+      } catch (err) {
+        console.error(err);
+        errorBanner.classList.remove('is-hidden');
+        document.getElementById('error-msg').textContent = "Failed to sync live yields. Using offline backup mechanism if available.";
+      }
+    }
+
+    // 2. Self-Contained Web Manifest Configuration 
+    const manifest = {
+      "short_name": "LiveSGS",
+      "name": "Live Singapore Sovereign Yield Curve",
+      "icons": [{ "src": "https://flaticon.com", "type": "image/png", "sizes": "512x512" }],
+      "start_url": ".",
+      "background_color": "#ffffff",
+      "theme_color": "#363636",
+      "display": "standalone"
+    };
+    const manifestBlob = new Blob([JSON.stringify(manifest)], {type: 'application/json'});
+    document.getElementById('manifest-placeholder').setAttribute('href', URL.createObjectURL(manifestBlob));
+
+    // 3. Service Worker Implementation 
+    const swCode = `
+      const CACHE_NAME = 'sgs-live-v1';
+      self.addEventListener('install', e => {
+        e.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll([
+          '/',
+          '/api/bonds',
+          'https://jsdelivr.net',
+          'https://cloudflare.com'
+        ])));
+      });
+      self.addEventListener('fetch', e => {
+        e.respondWith(caches.match(e.request).then(res => res || fetch(e.request)));
+      });
+    `;
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        const swBlob = new Blob([swCode], {type: 'text/javascript'});
+        navigator.serviceWorker.register(URL.createObjectURL(swBlob));
+      });
+    }
+
+    // Offline Tracking Hooks
+    window.addEventListener('offline', () => document.getElementById('offline-banner').classList.remove('is-hidden'));
+    window.addEventListener('online', () => document.getElementById('offline-banner').classList.add('is-hidden'));
+
+    // App Initialization Hooks
+    document.addEventListener('DOMContentLoaded', loadRealBondData);
+  </script>
+</body>
+</html>
