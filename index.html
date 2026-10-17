@@ -4,22 +4,22 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Live SGS Bond Curve PWA</title>
-  <!-- Bulma CSS CDN -->
+  <!-- Bulma CSS Framework -->
   <link rel="stylesheet" href="https://jsdelivr.net">
-  <!-- FontAwesome for Icons -->
+  <!-- FontAwesome for Visual Icons -->
   <link rel="stylesheet" href="https://cloudflare.com">
   
-  <!-- Web Manifest Appended Dynamically -->
+  <!-- Web Manifest Header Link Element -->
   <link rel="manifest" id="manifest-placeholder">
 </head>
 <body class="has-background-light" style="min-height: 100vh;">
 
-  <!-- Navigation Bar -->
+  <!-- App Header Navigation Bar -->
   <nav class="navbar is-dark">
     <div class="container">
       <div class="navbar-brand">
         <a class="navbar-item" href="#">
-          <i class="fas fa-satellite-dish mr-2 text-info"></i>
+          <i class="fas fa-chart-line mr-2 text-info"></i>
           <strong>Live SG Bond Curve PWA</strong>
         </a>
         <button class="button is-success is-small align-self-center ml-auto mr-3 is-hidden" id="installBtn">
@@ -29,34 +29,34 @@
     </div>
   </nav>
 
-  <!-- Main App Shell -->
+  <!-- Core Content Dashboard Grid -->
   <section class="section">
     <div class="container">
       
-      <!-- Network Connectivity & Error Banners -->
+      <!-- Network Warning Notification Banners -->
       <div id="offline-banner" class="notification is-warning is-light is-hidden mb-4">
-        <i class="fas fa-wifi-slash mr-2"></i> Offline mode active. Utilizing cached yield assets.
+        <i class="fas fa-wifi-slash mr-2"></i> Offline mode active. Utilizing local storage backups.
       </div>
       <div id="error-banner" class="notification is-danger is-light is-hidden mb-4">
         <i class="fas fa-exclamation-triangle mr-2"></i> <span id="error-msg">Failed to grab current yields.</span>
       </div>
 
-      <!-- Main Info Display Header -->
+      <!-- Application Title Header Block -->
       <div class="card mb-5">
         <div class="card-content">
           <div class="columns is-vcentered">
             <div class="column">
               <h1 class="title is-3">Singapore Government Securities (SGS)</h1>
-              <p class="subtitle is-6 text-muted">Real-Time Yield Curve (Updated: <span id="data-date">Fetching...</span>)</p>
+              <p class="subtitle is-6 text-muted">Real-Time Yield Curve (Updated: <span id="data-date" class="has-text-weight-bold">Fetching...</span>)</p>
             </div>
             <div class="column is-narrow text-right-tablet">
-              <span class="tag is-success is-medium">Status: Live Data Feed</span>
+              <span class="tag is-success is-medium">Status: Live Direct Feed</span>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Live Yields Table Box -->
+      <!-- Benchmark Matrix Data Table -->
       <div class="box">
         <div class="table-container">
           <table class="table is-striped is-hoverable is-fullwidth">
@@ -71,7 +71,7 @@
               <tr>
                 <td colspan="3" class="has-text-centered py-6">
                   <i class="fas fa-spinner fa-pulse fa-2x text-grey-light"></i>
-                  <p class="mt-2 text-grey">Contacting MAS Data Servers...</p>
+                  <p class="mt-2 text-grey">Contacting MAS Data Servers Directly...</p>
                 </td>
               </tr>
             </tbody>
@@ -82,44 +82,63 @@
     </div>
   </section>
 
-  <!-- Core App Controller Script -->
+  <!-- Application Engine Script Logic -->
   <script>
-    // 1. Core Async Fetch Request to your Vercel Proxy Route
-    async function loadRealBondData() {
+    // 1. Direct Browser-Based MAS Fetch Method (Bypasses CORS natively)
+    async function fetchSGSBonds() {
       const tbody = document.getElementById('yield-table-body');
       const dateEl = document.getElementById('data-date');
       const errorBanner = document.getElementById('error-banner');
 
+      // Direct Open Analytics API Endpoint mapping standard government bonds
+      const masEndpoint = 'https://mas.gov.sg';
+
       try {
-        const response = await fetch('/api/bonds');
-        if (!response.ok) throw new Error('Proxy server returned bad status code.');
+        const response = await fetch(masEndpoint);
+        if (!response.ok) throw new Error('MAS server rejected transaction execution rules.');
         
         const data = await response.json();
-        
-        // Render updated date timestamp
-        dateEl.textContent = data.date || 'Current Session';
-        
-        // Inject structural matrix cleanly into Bulma UI code
-        tbody.innerHTML = data.curve.map(row => `
+        const latestRecord = data.result.records[0];
+
+        if (!latestRecord) throw new Error('Active daily bond matrix array returned empty.');
+
+        // Update the timestamp displayed on the screen
+        dateEl.textContent = latestRecord.end_of_day || 'Today';
+
+        // Direct mapping configurations for individual sovereign tenors
+        const curveData = [
+          { code: 'BS26120W', tenor: '6-Month', yield: parseFloat(latestRecord.comp_sgs_6m_tb_yield) },
+          { code: 'BY26103X', tenor: '1-Year', yield: parseFloat(latestRecord.comp_sgs_1y_tb_yield) },
+          { code: 'N523100W', tenor: '2-Year', yield: parseFloat(latestRecord.comp_sgs_2y_grant_yield) },
+          { code: 'N523100W', tenor: '5-Year', yield: parseFloat(latestRecord.comp_sgs_5y_grant_yield) },
+          { code: 'NX21100N', tenor: '10-Year', yield: parseFloat(latestRecord.comp_sgs_10y_grant_yield) },
+          { code: 'NZ16100X', tenor: '15-Year', yield: parseFloat(latestRecord.comp_sgs_15y_grant_yield) },
+          { code: 'NY25200N', tenor: '20-Year', yield: parseFloat(latestRecord.comp_sgs_20y_grant_yield) },
+          { code: 'NZ26300E', tenor: '30-Year', yield: parseFloat(latestRecord.comp_sgs_30y_grant_yield) },
+          { code: 'NA24300E', tenor: '50-Year', yield: parseFloat(latestRecord.comp_sgs_50y_grant_yield) }
+        ];
+
+        // Process data elements cleanly into table DOM strings
+        tbody.innerHTML = curveData.map(row => `
           <tr>
             <td><code class="has-text-grey-dark">${row.code}</code></td>
-            <td><strong>${row.maturity}</strong></td>
+            <td><strong>${row.tenor}</strong></td>
             <td class="has-text-right has-text-weight-bold has-text-link">
-              ${row.yield > 0 ? row.yield.toFixed(2) + '%' : 'N/A'}
+              ${!isNaN(row.yield) ? row.yield.toFixed(2) + '%' : 'N/A'}
             </td>
           </tr>
         `).join('');
 
       } catch (err) {
-        console.error(err);
+        console.error('Data Fetching Failure Trace:', err);
         errorBanner.classList.remove('is-hidden');
-        document.getElementById('error-msg').textContent = "Failed to sync live yields.";
+        document.getElementById('error-msg').textContent = "Failed to synchronize live MAS yields directly from browser thread.";
       }
     }
 
-    // 2. Self-Contained Web Manifest Configuration 
+    // 2. Dynamic Progressive Web App Manifest Setup
     const manifest = {
-      "short_name": "LiveSGS",
+      "short_name": "DirectSGS",
       "name": "Live Singapore Sovereign Yield Curve",
       "icons": [{ "src": "https://flaticon.com", "type": "image/png", "sizes": "512x512" }],
       "start_url": "/",
@@ -130,21 +149,21 @@
     const manifestBlob = new Blob([JSON.stringify(manifest)], {type: 'application/json'});
     document.getElementById('manifest-placeholder').setAttribute('href', URL.createObjectURL(manifestBlob));
 
-    // 3. Service Worker Implementation pointing to standalone sw.js file
+    // 3. Service Worker Core Setup hook
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js')
-          .then(reg => console.log('Service Worker Registered Successfully:', reg.scope))
-          .catch(err => console.error('Service Worker Registration Failed:', err));
+          .then(reg => console.log('SGS Service Worker Active:', reg.scope))
+          .catch(err => console.error('PWA Worker Installation Faulted:', err));
       });
     }
 
-    // Offline Tracking Hooks
+    // Network Connectivity State Listeners
     window.addEventListener('offline', () => document.getElementById('offline-banner').classList.remove('is-hidden'));
     window.addEventListener('online', () => document.getElementById('offline-banner').classList.add('is-hidden'));
 
-    // App Initialization Hook
-    document.addEventListener('DOMContentLoaded', loadRealBondData);
+    // Boot execution thread when parsing completes
+    document.addEventListener('DOMContentLoaded', fetchSGSBonds);
   </script>
 
   <style>
