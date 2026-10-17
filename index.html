@@ -3,143 +3,133 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Live SGS Bond Curve PWA</title>
-  <!-- Bulma CSS Framework -->
+  <title>MAS API v1 JSON Inspector</title>
   <link rel="stylesheet" href="https://jsdelivr.net">
-  <!-- FontAwesome for Visual Icons -->
   <link rel="stylesheet" href="https://cloudflare.com">
-  
-  <!-- Web Manifest Header Link Element -->
   <link rel="manifest" id="manifest-placeholder">
 </head>
 <body class="has-background-light" style="min-height: 100vh;">
 
-  <!-- App Header Navigation Bar -->
-  <nav class="navbar is-dark">
+  <nav class="navbar is-dark shadow-sm">
     <div class="container">
       <div class="navbar-brand">
         <a class="navbar-item" href="#">
-          <i class="fas fa-chart-line mr-2 text-info"></i>
-          <strong>Live SG Bond Curve PWA</strong>
+          <i class="fas fa-code mr-2 text-info"></i><strong>MAS API v1 DevStudio</strong>
         </a>
-        <button class="button is-success is-small align-self-center ml-auto mr-3 is-hidden" id="installBtn">
-          <i class="fas fa-download mr-1"></i> Install App
-        </button>
       </div>
     </div>
   </nav>
 
-  <!-- Core Content Dashboard Grid -->
   <section class="section">
     <div class="container">
       
-      <!-- Network Warning Notification Banners -->
-      <div id="offline-banner" class="notification is-warning is-light is-hidden mb-4">
-        <i class="fas fa-wifi-slash mr-2"></i> Offline mode active. Utilizing local storage backups.
-      </div>
-      <div id="error-banner" class="notification is-danger is-light is-hidden mb-4">
-        <i class="fas fa-exclamation-triangle mr-2"></i> <span id="error-msg">Failed to grab current yields.</span>
-      </div>
-
-      <!-- Application Title Header Block -->
-      <div class="card mb-5">
-        <div class="card-content">
-          <div class="columns is-vcentered">
-            <div class="column">
-              <h1 class="title is-3">Singapore Government Securities (SGS)</h1>
-              <p class="subtitle is-6 text-muted">Real-Time Yield Curve (Updated: <span id="data-date" class="has-text-weight-bold">Fetching...</span>)</p>
+      <!-- Interactive Parameter Controller Box -->
+      <div class="box mb-5">
+        <h2 class="title is-4 mb-4"><i class="fas fa-sliders-h text-grey mr-2"></i>Query Parameter Control</h2>
+        
+        <div class="columns is-desktop">
+          <!-- Calendar Type Parameter Matrix -->
+          <div class="column is-4">
+            <div class="field">
+              <label class="label">Target Instrument Calendar</label>
+              <div class="control has-icons-left">
+                <div class="select is-fullwidth">
+                  <select id="param-type" onchange="inspectQueryData()">
+                    <option value="bonds">SGS Government Bonds (Types: B, I, G)</option>
+                    <option value="tbills-6m">6-Month Treasury Bills (Type: T)</option>
+                    <option value="tbills-1y">1-Year Treasury Bills (Type: T)</option>
+                    <option value="savings">Singapore Savings Bonds (Type: S)</option>
+                  </select>
+                </div>
+                <div class="icon is-small is-left">
+                  <i class="fas fa-file-invoice-dollar"></i>
+                </div>
+              </div>
             </div>
-            <div class="column is-narrow text-right-tablet">
-              <span class="tag is-success is-medium">Status: Live Direct Feed</span>
+          </div>
+
+          <!-- Date Filters -->
+          <div class="column is-4">
+            <div class="field">
+              <label class="label">Start Issuance Date</label>
+              <div class="control">
+                <input class="input" type="date" id="param-start" value="2026-01-01" onchange="inspectQueryData()">
+              </div>
+            </div>
+          </div>
+          <div class="column is-4">
+            <div class="field">
+              <label class="label">End Issuance Date</label>
+              <div class="control">
+                <input class="input" type="date" id="param-end" value="2026-12-31" onchange="inspectQueryData()">
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Benchmark Matrix Data Table -->
+      <!-- JSON Viewer Shell -->
       <div class="box">
-        <div class="table-container">
-          <table class="table is-striped is-hoverable is-fullwidth">
-            <thead>
-              <tr>
-                <th>Benchmark Issue</th>
-                <th>Maturity</th>
-                <th class="has-text-right">Live Yield (% p.a.)</th>
-              </tr>
-            </thead>
-            <tbody id="yield-table-body">
-              <tr>
-                <td colspan="3" class="has-text-centered py-6">
-                  <i class="fas fa-spinner fa-pulse fa-2x text-grey-light"></i>
-                  <p class="mt-2 text-grey">Contacting MAS Data Servers Directly...</p>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="is-flex is-justify-content-between is-align-items-center mb-3">
+          <h3 class="title is-4 mb-0"><i class="fas fa-terminal text-grey mr-2"></i>Live JSON Response Payload</h3>
+          <span class="tag is-info is-light id-hidden" id="loading-spinner">
+            <i class="fas fa-spinner fa-pulse mr-1"></i> Running Proxy Fetch Task...
+          </span>
+        </div>
+        
+        <div class="field">
+          <div class="control">
+            <pre class="has-background-black has-text-success p-4" style="border-radius: 6px; max-height: 600px; overflow-y: auto;"><code id="json-display">Loading initial parameter matrix...</code></pre>
+          </div>
         </div>
       </div>
 
     </div>
   </section>
 
-  <!-- Application Engine Script Logic -->
   <script>
-    // 1. Direct Browser-Based MAS Fetch Method (Bypasses CORS natively)
-    async function fetchSGSBonds() {
-      const tbody = document.getElementById('yield-table-body');
-      const dateEl = document.getElementById('data-date');
-      const errorBanner = document.getElementById('error-banner');
+    // Async execution handler connecting frontend inputs with serverless backend proxy
+    async function inspectQueryData() {
+      const display = document.getElementById('json-display');
+      const spinner = document.getElementById('loading-spinner');
+      
+      const typeSelection = document.getElementById('param-type').value;
+      const start = document.getElementById('param-start').value;
+      const end = document.getElementById('param-end').value;
 
-      // Direct Open Analytics API Endpoint mapping standard government bonds
-      const masEndpoint = 'https://mas.gov.sg';
+      let type = 'bonds';
+      let tenor = '';
 
+      if (typeSelection === 'tbills-6m') { type = 'tbills'; tenor = '0.5'; }
+      if (typeSelection === 'tbills-1y') { type = 'tbills'; tenor = '1'; }
+      if (typeSelection === 'savings') { type = 'savings'; }
+
+      spinner.classList.remove('is-hidden');
+      
       try {
-        const response = await fetch(masEndpoint);
-        if (!response.ok) throw new Error('MAS server rejected transaction execution rules.');
+        const queryUrl = `/api/bonds?type=${type}&start=${start}&end=${end}&tenor=${tenor}`;
+        const response = await fetch(queryUrl);
         
+        if (!response.ok) throw new Error(`HTTP Error Status: ${response.status}`);
         const data = await response.json();
-        const latestRecord = data.result.records[0];
-
-        if (!latestRecord) throw new Error('Active daily bond matrix array returned empty.');
-
-        // Update the timestamp displayed on the screen
-        dateEl.textContent = latestRecord.end_of_day || 'Today';
-
-        // Direct mapping configurations for individual sovereign tenors
-        const curveData = [
-          { code: 'BS26120W', tenor: '6-Month', yield: parseFloat(latestRecord.comp_sgs_6m_tb_yield) },
-          { code: 'BY26103X', tenor: '1-Year', yield: parseFloat(latestRecord.comp_sgs_1y_tb_yield) },
-          { code: 'N523100W', tenor: '2-Year', yield: parseFloat(latestRecord.comp_sgs_2y_grant_yield) },
-          { code: 'N523100W', tenor: '5-Year', yield: parseFloat(latestRecord.comp_sgs_5y_grant_yield) },
-          { code: 'NX21100N', tenor: '10-Year', yield: parseFloat(latestRecord.comp_sgs_10y_grant_yield) },
-          { code: 'NZ16100X', tenor: '15-Year', yield: parseFloat(latestRecord.comp_sgs_15y_grant_yield) },
-          { code: 'NY25200N', tenor: '20-Year', yield: parseFloat(latestRecord.comp_sgs_20y_grant_yield) },
-          { code: 'NZ26300E', tenor: '30-Year', yield: parseFloat(latestRecord.comp_sgs_30y_grant_yield) },
-          { code: 'NA24300E', tenor: '50-Year', yield: parseFloat(latestRecord.comp_sgs_50y_grant_yield) }
-        ];
-
-        // Process data elements cleanly into table DOM strings
-        tbody.innerHTML = curveData.map(row => `
-          <tr>
-            <td><code class="has-text-grey-dark">${row.code}</code></td>
-            <td><strong>${row.tenor}</strong></td>
-            <td class="has-text-right has-text-weight-bold has-text-link">
-              ${!isNaN(row.yield) ? row.yield.toFixed(2) + '%' : 'N/A'}
-            </td>
-          </tr>
-        `).join('');
-
+        
+        // Print formatted structural output inside the HTML pre container code space block
+        display.textContent = JSON.stringify(data, null, 2);
       } catch (err) {
-        console.error('Data Fetching Failure Trace:', err);
-        errorBanner.classList.remove('is-hidden');
-        document.getElementById('error-msg').textContent = "Failed to synchronize live MAS yields directly from browser thread.";
+        display.textContent = JSON.stringify({
+          success: false,
+          error_context: "Failed fetching proxy network asset components.",
+          details: err.message
+        }, null, 2);
+      } finally {
+        spinner.classList.add('is-hidden');
       }
     }
 
-    // 2. Dynamic Progressive Web App Manifest Setup
+    // Dynamic Standalone PWA Manifest Configuration Asset Mapping
     const manifest = {
-      "short_name": "DirectSGS",
-      "name": "Live Singapore Sovereign Yield Curve",
+      "short_name": "MASInspector",
+      "name": "MAS API v1 Realtime Data Inspector Studio",
       "icons": [{ "src": "https://flaticon.com", "type": "image/png", "sizes": "512x512" }],
       "start_url": "/",
       "background_color": "#ffffff",
@@ -149,26 +139,14 @@
     const manifestBlob = new Blob([JSON.stringify(manifest)], {type: 'application/json'});
     document.getElementById('manifest-placeholder').setAttribute('href', URL.createObjectURL(manifestBlob));
 
-    // 3. Service Worker Core Setup hook
+    // Register PWA service worker referencing standalone physical script architecture 
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js')
-          .then(reg => console.log('SGS Service Worker Active:', reg.scope))
-          .catch(err => console.error('PWA Worker Installation Faulted:', err));
+        navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW setup skipped.', err));
       });
     }
 
-    // Network Connectivity State Listeners
-    window.addEventListener('offline', () => document.getElementById('offline-banner').classList.remove('is-hidden'));
-    window.addEventListener('online', () => document.getElementById('offline-banner').classList.add('is-hidden'));
-
-    // Boot execution thread when parsing completes
-    document.addEventListener('DOMContentLoaded', fetchSGSBonds);
+    document.addEventListener('DOMContentLoaded', inspectQueryData);
   </script>
-
-  <style>
-    @media (min-width: 769px) { .text-right-tablet { text-align: right; } }
-    .text-muted { color: #666; }
-  </style>
 </body>
 </html>
