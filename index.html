@@ -4,12 +4,17 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Live SGS Bond Curve PWA</title>
+  <!-- Bulma CSS CDN -->
   <link rel="stylesheet" href="https://jsdelivr.net">
+  <!-- FontAwesome for Icons -->
   <link rel="stylesheet" href="https://cloudflare.com">
+  
+  <!-- Web Manifest Appended Dynamically -->
   <link rel="manifest" id="manifest-placeholder">
 </head>
 <body class="has-background-light" style="min-height: 100vh;">
 
+  <!-- Navigation Bar -->
   <nav class="navbar is-dark">
     <div class="container">
       <div class="navbar-brand">
@@ -24,10 +29,11 @@
     </div>
   </nav>
 
+  <!-- Main App Shell -->
   <section class="section">
     <div class="container">
       
-      <!-- Network Connectivity and Error Alerts -->
+      <!-- Network Connectivity & Error Banners -->
       <div id="offline-banner" class="notification is-warning is-light is-hidden mb-4">
         <i class="fas fa-wifi-slash mr-2"></i> Offline mode active. Utilizing cached yield assets.
       </div>
@@ -35,7 +41,7 @@
         <i class="fas fa-exclamation-triangle mr-2"></i> <span id="error-msg">Failed to grab current yields.</span>
       </div>
 
-      <!-- Main Info Display -->
+      <!-- Main Info Display Header -->
       <div class="card mb-5">
         <div class="card-content">
           <div class="columns is-vcentered">
@@ -50,7 +56,7 @@
         </div>
       </div>
 
-      <!-- Live Yields Table Container -->
+      <!-- Live Yields Table Box -->
       <div class="box">
         <div class="table-container">
           <table class="table is-striped is-hoverable is-fullwidth">
@@ -76,6 +82,7 @@
     </div>
   </section>
 
+  <!-- Core App Controller Script -->
   <script>
     // 1. Core Async Fetch Request to your Vercel Proxy Route
     async function loadRealBondData() {
@@ -106,7 +113,7 @@
       } catch (err) {
         console.error(err);
         errorBanner.classList.remove('is-hidden');
-        document.getElementById('error-msg').textContent = "Failed to sync live yields. Using offline backup mechanism if available.";
+        document.getElementById('error-msg').textContent = "Failed to sync live yields.";
       }
     }
 
@@ -115,7 +122,7 @@
       "short_name": "LiveSGS",
       "name": "Live Singapore Sovereign Yield Curve",
       "icons": [{ "src": "https://flaticon.com", "type": "image/png", "sizes": "512x512" }],
-      "start_url": ".",
+      "start_url": "/",
       "background_color": "#ffffff",
       "theme_color": "#363636",
       "display": "standalone"
@@ -123,25 +130,12 @@
     const manifestBlob = new Blob([JSON.stringify(manifest)], {type: 'application/json'});
     document.getElementById('manifest-placeholder').setAttribute('href', URL.createObjectURL(manifestBlob));
 
-    // 3. Service Worker Implementation 
-    const swCode = `
-      const CACHE_NAME = 'sgs-live-v1';
-      self.addEventListener('install', e => {
-        e.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll([
-          '/',
-          '/api/bonds',
-          'https://jsdelivr.net',
-          'https://cloudflare.com'
-        ])));
-      });
-      self.addEventListener('fetch', e => {
-        e.respondWith(caches.match(e.request).then(res => res || fetch(e.request)));
-      });
-    `;
+    // 3. Service Worker Implementation pointing to standalone sw.js file
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        const swBlob = new Blob([swCode], {type: 'text/javascript'});
-        navigator.serviceWorker.register(URL.createObjectURL(swBlob));
+        navigator.serviceWorker.register('/sw.js')
+          .then(reg => console.log('Service Worker Registered Successfully:', reg.scope))
+          .catch(err => console.error('Service Worker Registration Failed:', err));
       });
     }
 
@@ -149,8 +143,13 @@
     window.addEventListener('offline', () => document.getElementById('offline-banner').classList.remove('is-hidden'));
     window.addEventListener('online', () => document.getElementById('offline-banner').classList.add('is-hidden'));
 
-    // App Initialization Hooks
+    // App Initialization Hook
     document.addEventListener('DOMContentLoaded', loadRealBondData);
   </script>
+
+  <style>
+    @media (min-width: 769px) { .text-right-tablet { text-align: right; } }
+    .text-muted { color: #666; }
+  </style>
 </body>
 </html>
