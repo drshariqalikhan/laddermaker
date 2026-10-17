@@ -1,5 +1,6 @@
 // api/bonds.js
 export default async function handler(req, res) {
+  // Clear out cross-origin security rules cleanly
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET');
   res.setHeader('Content-Type', 'application/json');
@@ -27,7 +28,7 @@ export default async function handler(req, res) {
     const finalUrl = `${baseUrl}${endpoint}?rows=5&filters=${encodeURIComponent(filters)}&sort=${encodeURIComponent(sort)}`;
     
     const masResponse = await fetch(finalUrl);
-    if (!masResponse.ok) throw new Error(`MAS Registry responded with code: ${masResponse.status}`);
+    if (!masResponse.ok) throw new Error(`MAS API responded with code: ${masResponse.status}`);
     
     const payload = await masResponse.json();
     return res.status(200).json(payload);
