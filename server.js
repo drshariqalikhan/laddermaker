@@ -9,7 +9,7 @@ const BASE_MAS_URL = 'https://eservices.mas.gov.sg/statistics/api/v1/bondsandbil
 const SECONDARY_MARKET_URL = 'https://eservices.mas.gov.sg/statistics/fdanet/BondPricesAndYields.aspx';
 const YIELD_CURVE_URL = 'https://eservices.mas.gov.sg/statistics/fdanet/SgsBenchmarkIssuePrices.aspx';
 
-// 1. Scrape SGS Yield Curve from MAS (Extracting Yields, not Prices)
+// 1. Scrape SGS Yield Curve from MAS (Strictly Yields < 20%)
 async function getSGSYieldCurve() {
   try {
     const { data: html } = await axios.get(YIELD_CURVE_URL, {
@@ -23,38 +23,49 @@ async function getSGSYieldCurve() {
     let latestCurve = null;
 
     $('tr').each((_, row) => {
+      const rowText = $(row).text();
+      // Stop before entering the High/Low table
+      if (rowText.includes('High / Low') || rowText.includes('High/Low')) {
+        return false;
+      }
+
       const cols = $(row)
         .find('td')
         .map((_, td) => $(td).text().trim().replace(/\s+/g, ' '))
         .get();
 
-      // Check for date row (e.g., "16 Oct 2026" or "16-Oct-2026")
-      if (cols.length >= 10 && /\d{1,2}[\s\-]+[A-Za-z]{3}[\s\-]+\d{4}/.test(cols[0])) {
-        // Collect numeric values from the row
-        const rowVals = cols.slice(1).map(c => parseFloat(c)).filter(n => !isNaN(n));
+      // Find the column containing the date (e.g., "16 Oct 2026")
+      const dateIndex = cols.findIndex(c => /^\d{1,2}\s+[A-Za-z]{3}\s+\d{4}$/.test(c));
+      if (dateIndex === -1) return;
 
-        // Function to pick strictly the yield (< 20%) from a pair of price & yield
-        function pickYield(valA, valB) {
-          if (valA !== undefined && valA > 0 && valA < 20) return valA;
-          if (valB !== undefined && valB > 0 && valB < 20) return valB;
-          return null;
-        }
+      const dateStr = cols[dateIndex];
 
+      // Extract all numbers after the date column
+      const allNums = cols.slice(dateIndex + 1)
+        .map(c => parseFloat(c))
+        .filter(n => !isNaN(n));
+
+      // Separate Yields (< 20%) from Prices (>= 50)
+      const yields = allNums.filter(n => n > 0 && n < 20);
+
+      // There are 9 benchmark tenors: 6M, 1Y, 2Y, 5Y, 10Y, 15Y, 20Y, 30Y, 50Y
+      if (yields.length >= 9) {
         latestCurve = {
-          date: cols[0],
-          '6M': rowVals[0] !== undefined ? rowVals[0] : null,
-          '1Y': rowVals[1] !== undefined ? rowVals[1] : null,
-          '2Y': pickYield(rowVals[2], rowVals[3]),
-          '5Y': pickYield(rowVals[4], rowVals[5]),
-          '10Y': pickYield(rowVals[6], rowVals[7]),
-          '15Y': pickYield(rowVals[8], rowVals[9]),
-          '20Y': pickYield(rowVals[10], rowVals[11]),
-          '30Y': pickYield(rowVals[12], rowVals[13]),
-          '50Y': pickYield(rowVals[14], rowVals[15])
+          date: dateStr,
+          '6M': yields[0],
+          '1Y': yields[1],
+          '2Y': yields[2],
+          '5Y': yields[3],
+          '10Y': yields[4],
+          '15Y': yields[5],
+          '20Y': yields[6],
+          '30Y': yields[7],
+          '50Y': yields[8]
         };
       }
     });
 
+    console.log('[Yield Curve Scraper] Parsed Benchmark Yields:', latestCurve);
     return latestCurve;
   } catch (err) {
     console.error('Error fetching yield curve:', err.message);
@@ -433,7 +444,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         { label: '20Y', years: 20, val: c['20Y'], seg: 'Ultra-Long' },
         { label: '30Y', years: 30, val: c['30Y'], seg: 'Ultra-Long' },
         { label: '50Y', years: 50, val: c['50Y'], seg: 'Ultra-Long' }
-      ].filter(t => t.val !== null && t.val !== undefined);
+      ].filter(t => t.val !== null && t.val !== undefined && t.val < 20);
 
       renderSvgCurve(tenors);
 
@@ -473,7 +484,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       const getX = (idx) => padL + (idx / Math.max(1, tenors.length - 1)) * chartW;
       const getY = (val) => padT + chartH - ((val - minVal) / Math.max(0.01, maxVal - minVal)) * chartH;
 
-      // Draw Grid Lines (Y-Axis)
+      // Grid Lines
       const gridSteps = 4;
       for (let i = 0; i <= gridSteps; i++) {
         const yVal = minVal + (i / gridSteps) * (maxVal - minVal);
@@ -498,7 +509,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         svg.appendChild(text);
       }
 
-      // Draw Area Fill Under Curve
+      // Area fill
       let areaPathD = 'M ' + getX(0) + ' ' + (padT + chartH) + ' ';
       for (let i = 0; i < tenors.length; i++) {
         areaPathD += 'L ' + getX(i) + ' ' + getY(tenors[i].val) + ' ';
@@ -517,7 +528,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       area.setAttribute('fill', 'url(#curveGrad)');
       svg.appendChild(area);
 
-      // Draw Curve Line
+      // Curve line
       let linePathD = '';
       for (let i = 0; i < tenors.length; i++) {
         linePathD += (i === 0 ? 'M ' : 'L ') + getX(i) + ' ' + getY(tenors[i].val) + ' ';
@@ -530,7 +541,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       path.setAttribute('stroke-width', '3');
       svg.appendChild(path);
 
-      // Draw Points & Labels
+      // Points & Labels
       tenors.forEach((t, i) => {
         const cx = getX(i);
         const cy = getY(t.val);
