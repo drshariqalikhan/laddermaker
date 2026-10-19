@@ -205,7 +205,7 @@ async function scrapeMASSecondaryMarket() {
   }
 }
 
-// 3. Fetch Primary MAS API using Axios with parameter serialization
+// 3. Fetch Primary MAS API using Axios
 async function fetchMasApi(endpoint, filters, sort = 'ann_date asc') {
   try {
     const res = await axios.get(`${BASE_MAS_URL}${endpoint}`, {
@@ -237,7 +237,6 @@ async function getMasterTableData() {
   const sgsFilters = `issue_type:("B" OR "I" OR "G") AND ann_date:[${startDate} TO ${endDate}]`;
   const tbillFilters = `issue_type:"T" AND ann_date:[${startDate} TO ${endDate}]`;
 
-  // Fetch in parallel with guaranteed resolution
   const [sgsRecords, tbillRecords, secondaryBonds, yieldCurve] = await Promise.all([
     fetchMasApi('/issuancecalendar', sgsFilters),
     fetchMasApi('/issuancecalendar', tbillFilters),
@@ -379,7 +378,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         <div class="level-left">
           <div>
             <h1 class="title is-4 has-text-light" id="page-title">Singapore Government Securities</h1>
-            <p class="subtitle is-6 has-text-grey" id="page-subtitle">Build customized bond ladders, track cashflow timelines, and optimize yields</p>
+            <p class="subtitle is-6 has-text-grey" id="page-subtitle">Build customized annual spending ladders, track cashflow timelines, and optimize yields</p>
           </div>
         </div>
         <div class="level-right">
@@ -448,46 +447,63 @@ const HTML_CONTENT = `<!DOCTYPE html>
       <!-- Bond Ladder Configuration Controls -->
       <div id="ladder-controls-panel" class="box ladder-card mb-4 p-4">
         <div class="columns is-multiline is-vcentered">
+          <!-- Start Payment Date -->
           <div class="column is-3">
-            <label class="label is-small has-text-grey">Payment / Rung Frequency</label>
+            <label class="label is-small has-text-warning"><i class="fa-solid fa-calendar-star mr-1"></i> First Payment Date (Maturity #1)</label>
+            <div class="control has-icons-left">
+              <input class="input is-small is-dark monospace" type="date" id="ladder-start-date">
+              <span class="icon is-small is-left has-text-grey"><i class="fa-regular fa-calendar"></i></span>
+            </div>
+            <p class="help has-text-grey-light" style="font-size: 0.7rem;">Target date for your 1st annual income lump sum</p>
+          </div>
+
+          <!-- Frequency -->
+          <div class="column is-2">
+            <label class="label is-small has-text-grey">Payment Frequency</label>
             <div class="control">
               <div class="select is-small is-fullwidth is-dark">
                 <select id="ladder-freq">
-                  <option value="0.25">Every 3 Months (Quarterly)</option>
-                  <option value="0.5" selected>Every 6 Months (Semi-Annually)</option>
-                  <option value="1.0">Every 1 Year (Annually)</option>
+                  <option value="1.0" selected>Every 1 Year (Annual)</option>
+                  <option value="0.5">Every 6M (Semi-Annual)</option>
+                  <option value="0.25">Every 3M (Quarterly)</option>
                 </select>
               </div>
             </div>
           </div>
-          <div class="column is-3">
-            <label class="label is-small has-text-grey">Ladder Horizon (Duration)</label>
+
+          <!-- Horizon -->
+          <div class="column is-2">
+            <label class="label is-small has-text-grey">Income Horizon (Years)</label>
             <div class="control">
               <div class="select is-small is-fullwidth is-dark">
                 <select id="ladder-horizon">
                   <option value="1">1 Year</option>
                   <option value="2">2 Years</option>
-                  <option value="3" selected>3 Years</option>
-                  <option value="5">5 Years</option>
+                  <option value="3">3 Years</option>
+                  <option value="5" selected>5 Years</option>
                   <option value="10">10 Years</option>
                 </select>
               </div>
             </div>
           </div>
-          <div class="column is-3">
-            <label class="label is-small has-text-grey">Total Capital to Invest (SGD)</label>
+
+          <!-- Total Capital -->
+          <div class="column is-2">
+            <label class="label is-small has-text-grey">Total Capital (SGD)</label>
             <div class="control has-icons-left">
-              <input class="input is-small is-dark monospace" type="number" id="ladder-capital" value="60000" step="5000" min="1000">
+              <input class="input is-small is-dark monospace" type="number" id="ladder-capital" value="100000" step="5000" min="1000">
               <span class="icon is-small is-left has-text-grey">$</span>
             </div>
           </div>
+
+          <!-- Strategy -->
           <div class="column is-3">
             <label class="label is-small has-text-grey">Optimization Mode</label>
             <div class="control">
               <div class="select is-small is-fullwidth is-dark">
                 <select id="ladder-strategy">
                   <option value="max-yield" selected>Max Yield (Highest Ladder Return)</option>
-                  <option value="closest">Closest to Exact Rung Date</option>
+                  <option value="closest">Closest to Exact Target Date</option>
                 </select>
               </div>
             </div>
@@ -516,7 +532,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         <div class="level mb-3">
           <div class="level-left">
             <h3 class="subtitle is-6 has-text-weight-bold has-text-light mb-0">
-              <i class="fa-solid fa-layer-group mr-2 has-text-success"></i> Ladder Portfolio Schedule
+              <i class="fa-solid fa-layer-group mr-2 has-text-success"></i> Scheduled Spending Ladder
             </h3>
           </div>
           <div class="level-right">
@@ -532,14 +548,14 @@ const HTML_CONTENT = `<!DOCTYPE html>
           <div class="level mb-2">
             <div class="level-left">
               <h3 class="subtitle is-6 has-text-weight-bold has-text-info mb-0">
-                <i class="fa-solid fa-timeline mr-2"></i> Cash Flow Timeline (Coupons & Maturity Returns)
+                <i class="fa-solid fa-timeline mr-2"></i> Cash Flow Timeline (Coupons & Maturity Lump Sums)
               </h3>
             </div>
             <div class="level-right">
               <span class="tag is-dark monospace is-size-7" id="timeline-count-badge">0 Scheduled Payments</span>
             </div>
           </div>
-          <p class="is-size-7 has-text-grey mb-3">Scroll horizontally to view upcoming coupon payouts and principal maturity returns coming in over your horizon.</p>
+          <p class="is-size-7 has-text-grey mb-3">Scroll horizontally to view upcoming semi-annual coupons and annual principal payouts starting from your designated first payment date.</p>
           
           <div style="overflow-x: auto; padding: 15px 5px 10px 5px; -webkit-overflow-scrolling: touch;">
             <div style="position: relative; min-width: max-content; padding-bottom: 5px;">
@@ -557,9 +573,9 @@ const HTML_CONTENT = `<!DOCTYPE html>
             <thead>
               <tr>
                 <th>RUNG</th>
-                <th>TARGET PERIOD</th>
+                <th>TARGET PAYOUT DATE</th>
                 <th>SELECTED SECURITY</th>
-                <th>MATURITY DATE</th>
+                <th>ACTUAL MATURITY</th>
                 <th>COUPON PAYMENT SCHEDULE</th>
                 <th>ALLOCATED CAPITAL</th>
                 <th>INDICATIVE YIELD</th>
@@ -657,7 +673,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       return day + ' ' + MONTH_NAMES[dateObj.getMonth()] + ' ' + dateObj.getFullYear();
     }
 
-    // 1. Initialize PWA
+    // 1. Initialize PWA & Default Start Payment Date
     (function initPWA() {
       const manifest = {
         name: "LadderMaker - Singapore Bond Ladder",
@@ -679,6 +695,14 @@ const HTML_CONTENT = `<!DOCTYPE html>
         const sw = "self.addEventListener('fetch', e => e.respondWith(fetch(e.request)));";
         navigator.serviceWorker.register(URL.createObjectURL(new Blob([sw], { type: 'application/javascript' }))).catch(() => {});
       }
+
+      // Default First Payment Date to 1 Year from Today
+      const defaultFirstDate = new Date();
+      defaultFirstDate.setFullYear(defaultFirstDate.getFullYear() + 1);
+      const yyyy = defaultFirstDate.getFullYear();
+      const mm = String(defaultFirstDate.getMonth() + 1).padStart(2, '0');
+      const dd = String(defaultFirstDate.getDate()).padStart(2, '0');
+      document.getElementById('ladder-start-date').value = yyyy + '-' + mm + '-' + dd;
 
       const yearSelect = document.getElementById('year-select');
       for (let y = currentYear + 1; y >= currentYear - 2; y--) {
@@ -759,12 +783,21 @@ const HTML_CONTENT = `<!DOCTYPE html>
       }
     }
 
-    // 3. Build Bond Ladder Engine
+    // 3. Build Bond Ladder Engine (Respecting Start Payment Date)
     function buildBondLadder() {
-      const stepYears = parseFloat(document.getElementById('ladder-freq').value) || 0.5;
-      const horizonYears = parseFloat(document.getElementById('ladder-horizon').value) || 3.0;
-      const totalCapital = parseFloat(document.getElementById('ladder-capital').value) || 60000;
+      const stepYears = parseFloat(document.getElementById('ladder-freq').value) || 1.0;
+      const horizonYears = parseFloat(document.getElementById('ladder-horizon').value) || 5.0;
+      const totalCapital = parseFloat(document.getElementById('ladder-capital').value) || 100000;
       const strategy = document.getElementById('ladder-strategy').value;
+
+      // Parse user's selected First Payment Date
+      const startDateInput = document.getElementById('ladder-start-date').value;
+      let firstPaymentDate = new Date(startDateInput);
+      if (isNaN(firstPaymentDate.getTime())) {
+        firstPaymentDate = new Date();
+        firstPaymentDate.setFullYear(firstPaymentDate.getFullYear() + 1);
+      }
+      firstPaymentDate.setHours(0, 0, 0, 0);
 
       const numRungs = Math.round(horizonYears / stepYears);
       const capitalPerRung = totalCapital / Math.max(1, numRungs);
@@ -774,19 +807,32 @@ const HTML_CONTENT = `<!DOCTYPE html>
       ladderSchedule = [];
 
       for (let i = 1; i <= numRungs; i++) {
-        const targetDuration = i * stepYears;
-        const windowTolerance = stepYears * 0.75;
+        // Calculate the target maturity date for this rung
+        // Rung 1 = firstPaymentDate
+        // Rung 2 = firstPaymentDate + 1 interval, etc.
+        const targetDateObj = new Date(firstPaymentDate.getTime());
+        const monthsToAdd = Math.round((i - 1) * stepYears * 12);
+        targetDateObj.setMonth(targetDateObj.getMonth() + monthsToAdd);
 
+        const windowToleranceDays = stepYears * 365.25 * 0.75;
+
+        // Find candidate securities maturing closest to this target date
         let candidates = availableBonds.filter(b => {
           if (usedIssueCodes.has(b.issueCode)) return false;
-          const diff = Math.abs(b.durationYears - targetDuration);
-          return diff <= windowTolerance;
+          const mat = parseFlexibleDate(b.maturityDate);
+          if (!mat) return false;
+          const diffDays = Math.abs((mat - targetDateObj) / 86400000);
+          return diffDays <= windowToleranceDays;
         });
 
         if (!candidates.length) {
           candidates = availableBonds
-            .filter(b => !usedIssueCodes.has(b.issueCode))
-            .sort((a, b) => Math.abs(a.durationYears - targetDuration) - Math.abs(b.durationYears - targetDuration))
+            .filter(b => !usedIssueCodes.has(b.issueCode) && parseFlexibleDate(b.maturityDate))
+            .sort((a, b) => {
+              const diffA = Math.abs((parseFlexibleDate(a.maturityDate) - targetDateObj) / 86400000);
+              const diffB = Math.abs((parseFlexibleDate(b.maturityDate) - targetDateObj) / 86400000);
+              return diffA - diffB;
+            })
             .slice(0, 3);
         }
 
@@ -796,7 +842,11 @@ const HTML_CONTENT = `<!DOCTYPE html>
             candidates.sort((a, b) => (b.indicativeYield || 0) - (a.indicativeYield || 0));
             selected = candidates[0];
           } else {
-            candidates.sort((a, b) => Math.abs(a.durationYears - targetDuration) - Math.abs(b.durationYears - targetDuration));
+            candidates.sort((a, b) => {
+              const diffA = Math.abs((parseFlexibleDate(a.maturityDate) - targetDateObj) / 86400000);
+              const diffB = Math.abs((parseFlexibleDate(b.maturityDate) - targetDateObj) / 86400000);
+              return diffA - diffB;
+            });
             selected = candidates[0];
           }
 
@@ -804,8 +854,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
           ladderSchedule.push({
             rungIndex: i,
-            targetPeriodStr: formatTargetPeriod(targetDuration),
-            targetDuration: targetDuration,
+            targetDateObj: targetDateObj,
+            targetDateStr: formatDateStr(targetDateObj),
             selectedBond: selected,
             allocatedCapital: capitalPerRung,
             candidates: candidates
@@ -816,14 +866,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
       const cashflows = generateLadderCashflows(ladderSchedule);
       renderLadderTimeline(cashflows);
       renderLadderTable(totalCapital);
-    }
-
-    function formatTargetPeriod(years) {
-      if (years < 1) {
-        const months = Math.round(years * 12);
-        return months + ' Months';
-      }
-      return years.toFixed(years % 1 === 0 ? 0 : 1) + ' Year' + (years > 1 ? 's' : '');
     }
 
     // 4. Generate & Render Scrollable Cashflow Timeline with Coupons & Maturity Inflows
@@ -849,7 +891,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
               interestAmt: Math.round(totalPayout - C),
               issueCode: b.issueCode,
               secType: b.secType,
-              type: 'T-Bill Maturity Payout',
+              type: 'T-Bill Maturity (Payout #' + rung.rungIndex + ')',
               isMaturity: true
             });
           }
@@ -887,7 +929,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
                     amount: semiCouponAmt,
                     issueCode: b.issueCode,
                     secType: b.secType,
-                    type: 'Coupon Payout',
+                    type: 'Coupon Payment',
                     isMaturity: false
                   });
                 }
@@ -904,7 +946,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
               interestAmt: semiCouponAmt,
               issueCode: b.issueCode,
               secType: b.secType,
-              type: 'Maturity (Principal + Coupon)',
+              type: 'Maturity Lump Sum (Payout #' + rung.rungIndex + ')',
               isMaturity: true
             });
           }
@@ -928,7 +970,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
       cashflows.forEach(cf => {
         const node = document.createElement('div');
-        node.style.cssText = 'display: inline-flex; flex-direction: column; align-items: center; min-width: 155px; text-align: center; margin-right: 20px;';
+        node.style.cssText = 'display: inline-flex; flex-direction: column; align-items: center; min-width: 160px; text-align: center; margin-right: 20px;';
 
         const badgeClass = cf.isMaturity ? 'is-success' : 'is-info';
         const arrowColor = cf.isMaturity ? '#48c78e' : '#58a6ff';
@@ -937,7 +979,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
         let subDetail = '';
         if (cf.isMaturity && cf.principalAmt) {
-          subDetail = '<div class="is-size-7 has-text-grey mt-1">Principal: $' + cf.principalAmt.toLocaleString() + '</div>';
+          subDetail = '<div class="is-size-7 has-text-grey mt-1">Lump Sum Principal: $' + cf.principalAmt.toLocaleString() + '</div>';
         }
 
         node.innerHTML = 
@@ -995,7 +1037,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
         const tr = document.createElement('tr');
         tr.innerHTML = '<td><span class="rung-step has-text-white is-size-7" style="' + badgeColor + '">' + rung.rungIndex + '</span></td>' +
-          '<td><span class="tag is-dark monospace has-text-weight-bold">~' + rung.targetPeriodStr + '</span></td>' +
+          '<td><span class="tag is-warning is-light monospace has-text-weight-bold"><i class="fa-regular fa-calendar-check mr-1"></i> ' + rung.targetDateStr + '</span></td>' +
           '<td><span class="monospace has-text-weight-bold has-text-light">' + b.issueCode + '</span> <span class="tag is-small ml-2 ' + tagClass + '">' + b.secType + '</span></td>' +
           '<td class="has-text-weight-medium">' + b.maturityDate + '</td>' +
           '<td>' + (b.isTbill 
@@ -1016,13 +1058,14 @@ const HTML_CONTENT = `<!DOCTYPE html>
       document.getElementById('stat-label-2').textContent = 'Total Capital';
       document.getElementById('stat-val-2').textContent = '$' + Math.round(totalCapital).toLocaleString();
 
-      document.getElementById('stat-label-3').textContent = 'Est. Annual Cashflow';
+      document.getElementById('stat-label-3').textContent = 'Est. Annual Income';
       document.getElementById('stat-val-3').innerHTML = '<span class="has-text-info">+$' + Math.round(totalEstAnnualIncome).toLocaleString() + '</span>';
 
       document.getElementById('stat-label-4').textContent = 'Active Rungs';
-      document.getElementById('stat-val-4').textContent = ladderSchedule.length + ' Maturities';
+      document.getElementById('stat-val-4').textContent = ladderSchedule.length + ' Payouts';
     }
 
+    document.getElementById('ladder-start-date').onchange = buildBondLadder;
     document.getElementById('ladder-freq').onchange = buildBondLadder;
     document.getElementById('ladder-horizon').onchange = buildBondLadder;
     document.getElementById('ladder-capital').oninput = buildBondLadder;
@@ -1396,13 +1439,13 @@ const HTML_CONTENT = `<!DOCTYPE html>
     document.getElementById('btn-export').onclick = () => {
       if (currentType === 'ladder') {
         if (!ladderSchedule.length) return;
-        const csvRows = ['Rung,TargetPeriod,Type,IssueCode,ISIN,MaturityDate,CouponSchedule,AllocatedCapital,IndicativeYield,EstAnnualIncome'];
+        const csvRows = ['Rung,TargetPayoutDate,Type,IssueCode,ISIN,MaturityDate,CouponSchedule,AllocatedCapital,IndicativeYield,EstAnnualIncome'];
         ladderSchedule.forEach(r => {
           const b = r.selectedBond;
           const y = b.indicativeYield || 0;
           const inc = (r.allocatedCapital * y) / 100;
           csvRows.push([
-            r.rungIndex, r.targetPeriodStr, b.secType, b.issueCode, b.isin,
+            r.rungIndex, r.targetDateStr, b.secType, b.issueCode, b.isin,
             b.maturityDate, b.couponSchedule, r.allocatedCapital, y + '%', inc
           ].map(x => '"' + (x ?? '') + '"').join(','));
         });
