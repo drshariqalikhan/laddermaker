@@ -9,23 +9,6 @@ const BASE_MAS_URL = 'https://eservices.mas.gov.sg/statistics/api/v1/bondsandbil
 const SECONDARY_MARKET_URL = 'https://eservices.mas.gov.sg/statistics/fdanet/BondPricesAndYields.aspx';
 const YIELD_CURVE_URL = 'https://eservices.mas.gov.sg/statistics/fdanet/SgsBenchmarkIssuePrices.aspx';
 
-// Helper to reliably separate Yield (< 20%) from Price (> 50)
-function pickYield(candidates) {
-  for (const c of candidates) {
-    const num = parseFloat(c);
-    if (!isNaN(num) && num > 0 && num < 20) return num;
-  }
-  return null;
-}
-
-function pickPrice(candidates) {
-  for (const c of candidates) {
-    const num = parseFloat(c);
-    if (!isNaN(num) && num >= 50 && num <= 200) return num;
-  }
-  return null;
-}
-
 // 1. Scrape SGS Yield Curve from MAS (Extracting Yields, not Prices)
 async function getSGSYieldCurve() {
   try {
@@ -42,34 +25,32 @@ async function getSGSYieldCurve() {
     $('tr').each((_, row) => {
       const cols = $(row)
         .find('td')
-        .map((_, td) => $(td).text().trim())
+        .map((_, td) => $(td).text().trim().replace(/\s+/g, ' '))
         .get();
 
-      // Row format: Date, 6M, 1Y, [2Y Price/Yield], [5Y Price/Yield] ...
-      if (cols.length > 15 && /^\d{1,2}\s[A-Za-z]{3}\s\d{4}$/.test(cols[0])) {
+      // Check for date row (e.g., "16 Oct 2026" or "16-Oct-2026")
+      if (cols.length >= 10 && /\d{1,2}[\s\-]+[A-Za-z]{3}[\s\-]+\d{4}/.test(cols[0])) {
+        // Collect numeric values from the row
+        const rowVals = cols.slice(1).map(c => parseFloat(c)).filter(n => !isNaN(n));
+
+        // Function to pick strictly the yield (< 20%) from a pair of price & yield
+        function pickYield(valA, valB) {
+          if (valA !== undefined && valA > 0 && valA < 20) return valA;
+          if (valB !== undefined && valB > 0 && valB < 20) return valB;
+          return null;
+        }
+
         latestCurve = {
           date: cols[0],
-          // Treasury Bills (Quoted only in Yield)
-          '6M': pickYield([cols[1]]),
-          '1Y': pickYield([cols[2]]),
-
-          // Bonds (Paired Price and Yield columns: pick strictly the Yield < 20%)
-          '2Y': pickYield([cols[3], cols[4], cols[5]]),
-          '5Y': pickYield([cols[5], cols[6], cols[7]]),
-          '10Y': pickYield([cols[7], cols[8], cols[9]]),
-          '15Y': pickYield([cols[9], cols[10], cols[11]]),
-          '20Y': pickYield([cols[11], cols[12], cols[13]]),
-          '30Y': pickYield([cols[13], cols[14], cols[15]]),
-          '50Y': pickYield([cols[15], cols[16], cols[17]]),
-
-          // Clean Prices captured for reference
-          price_2Y: pickPrice([cols[3], cols[4], cols[5]]),
-          price_5Y: pickPrice([cols[5], cols[6], cols[7]]),
-          price_10Y: pickPrice([cols[7], cols[8], cols[9]]),
-          price_15Y: pickPrice([cols[9], cols[10], cols[11]]),
-          price_20Y: pickPrice([cols[11], cols[12], cols[13]]),
-          price_30Y: pickPrice([cols[13], cols[14], cols[15]]),
-          price_50Y: pickPrice([cols[15], cols[16], cols[17]])
+          '6M': rowVals[0] !== undefined ? rowVals[0] : null,
+          '1Y': rowVals[1] !== undefined ? rowVals[1] : null,
+          '2Y': pickYield(rowVals[2], rowVals[3]),
+          '5Y': pickYield(rowVals[4], rowVals[5]),
+          '10Y': pickYield(rowVals[6], rowVals[7]),
+          '15Y': pickYield(rowVals[8], rowVals[9]),
+          '20Y': pickYield(rowVals[10], rowVals[11]),
+          '30Y': pickYield(rowVals[12], rowVals[13]),
+          '50Y': pickYield(rowVals[14], rowVals[15])
         };
       }
     });
@@ -172,7 +153,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
     .tabs.is-boxed li.is-active a { background-color: #21262d; border-color: #30363d #30363d transparent; color: #58a6ff; font-weight: bold; }
     .tabs.is-boxed a { border-color: transparent; }
     .chart-container { background-color: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.5rem; }
-    .curve-point:hover { r: 7; fill: #58a6ff; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -196,7 +176,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
     </div>
   </nav>
 
-  <!-- Main Container -->
+  <!-- Main Content -->
   <main class="section main-container">
     <div class="container">
 
@@ -280,7 +260,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       <!-- Loading Spinner -->
       <div id="status-container" class="has-text-centered py-6">
         <span class="icon is-large has-text-info"><i class="fas fa-2x fa-spinner fa-spin"></i></span>
-        <p class="mt-3 has-text-grey" id="status-text">Fetching live data from MAS...</p>
+        <p class="mt-3 has-text-grey" id="status-text">Fetching data from MAS...</p>
       </div>
 
       <!-- Standard Table Section -->
@@ -304,20 +284,17 @@ const HTML_CONTENT = `<!DOCTYPE html>
               <span class="tag is-dark monospace" id="curve-date-badge">As of: -</span>
             </div>
           </div>
-          <!-- Responsive SVG Curve -->
           <div style="width: 100%; max-width: 900px; margin: 0 auto;">
             <svg id="curve-svg" viewBox="0 0 800 280" style="width: 100%; height: auto; display: block;"></svg>
           </div>
         </div>
 
-        <!-- Tenor Breakdown Table -->
         <div class="table-container">
           <table class="table is-fullwidth is-hoverable is-narrow">
             <thead>
               <tr>
                 <th>TENOR</th>
                 <th>BENCHMARK YIELD (% P.A.)</th>
-                <th>CLEAN PRICE</th>
                 <th>SPREAD TO 6M (BPS)</th>
                 <th>SEGMENT</th>
               </tr>
@@ -410,25 +387,27 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
         showLoading(false);
       } catch (err) {
+        showLoading(false);
         document.getElementById('status-container').innerHTML = '<div class="notification is-danger is-light">' + err.message + '</div>';
+        document.getElementById('status-container').classList.remove('is-hidden');
       }
     }
 
     // 3. Render Yield Curve View
     function renderYieldCurveView() {
       document.getElementById('table-wrapper').classList.add('is-hidden');
-      document.getElementById('empty-state').classList.add('is-hidden');
       document.getElementById('curve-wrapper').classList.remove('is-hidden');
 
-      if (!yieldCurveData) {
+      if (!yieldCurveData || !yieldCurveData.date) {
         document.getElementById('empty-state').classList.remove('is-hidden');
+        document.getElementById('curve-wrapper').classList.add('is-hidden');
         return;
       }
+      document.getElementById('empty-state').classList.add('is-hidden');
 
       const c = yieldCurveData;
       document.getElementById('curve-date-badge').textContent = 'As of: ' + c.date;
 
-      // Update Metrics with real yields (typically 1.5% - 3.5%)
       document.getElementById('stat-label-1').textContent = 'Curve Date';
       document.getElementById('stat-val-1').textContent = c.date;
 
@@ -444,37 +423,33 @@ const HTML_CONTENT = `<!DOCTYPE html>
         ? '<span class="' + (spread10_2 >= 0 ? 'has-text-success' : 'has-text-danger') + '">' + (spread10_2 >= 0 ? '+' : '') + spread10_2 + ' bps</span>' 
         : 'N/A';
 
-      // Tenors Array
       const tenors = [
-        { label: '6M', years: 0.5, val: c['6M'], price: null, seg: 'Money Market' },
-        { label: '1Y', years: 1, val: c['1Y'], price: null, seg: 'Short-Term' },
-        { label: '2Y', years: 2, val: c['2Y'], price: c.price_2Y, seg: 'Short-Term' },
-        { label: '5Y', years: 5, val: c['5Y'], price: c.price_5Y, seg: 'Medium-Term' },
-        { label: '10Y', years: 10, val: c['10Y'], price: c.price_10Y, seg: 'Long-Term (Benchmark)' },
-        { label: '15Y', years: 15, val: c['15Y'], price: c.price_15Y, seg: 'Long-Term' },
-        { label: '20Y', years: 20, val: c['20Y'], price: c.price_20Y, seg: 'Ultra-Long' },
-        { label: '30Y', years: 30, val: c['30Y'], price: c.price_30Y, seg: 'Ultra-Long' },
-        { label: '50Y', years: 50, val: c['50Y'], price: c.price_50Y, seg: 'Ultra-Long' }
-      ].filter(t => t.val !== null);
+        { label: '6M', years: 0.5, val: c['6M'], seg: 'Money Market' },
+        { label: '1Y', years: 1, val: c['1Y'], seg: 'Short-Term' },
+        { label: '2Y', years: 2, val: c['2Y'], seg: 'Short-Term' },
+        { label: '5Y', years: 5, val: c['5Y'], seg: 'Medium-Term' },
+        { label: '10Y', years: 10, val: c['10Y'], seg: 'Long-Term (Benchmark)' },
+        { label: '15Y', years: 15, val: c['15Y'], seg: 'Long-Term' },
+        { label: '20Y', years: 20, val: c['20Y'], seg: 'Ultra-Long' },
+        { label: '30Y', years: 30, val: c['30Y'], seg: 'Ultra-Long' },
+        { label: '50Y', years: 50, val: c['50Y'], seg: 'Ultra-Long' }
+      ].filter(t => t.val !== null && t.val !== undefined);
 
       renderSvgCurve(tenors);
 
-      // Render Table
       const tbody = document.getElementById('curve-table-body');
       tbody.innerHTML = '';
       const base6M = c['6M'] || tenors[0]?.val || 0;
 
       tenors.forEach(t => {
         const spreadTo6M = ((t.val - base6M) * 100).toFixed(1);
-        const priceDisplay = t.price ? '$' + t.price.toFixed(2) : '<span class="has-text-grey-dark">-</span>';
+        const spreadClass = spreadTo6M >= 0 ? 'has-text-success' : 'has-text-danger';
+        const spreadSign = spreadTo6M >= 0 ? '+' : '';
         const tr = document.createElement('tr');
-        tr.innerHTML = \`
-          <td><span class="tag is-info is-light monospace has-text-weight-bold">\${t.label}</span></td>
-          <td class="has-text-weight-bold has-text-light monospace">\${t.val.toFixed(2)}%</td>
-          <td class="monospace has-text-grey-light">\${priceDisplay}</td>
-          <td class="monospace \${spreadTo6M >= 0 ? 'has-text-success' : 'has-text-danger'}">\${spreadTo6M >= 0 ? '+' : ''}\${spreadTo6M} bps</td>
-          <td><span class="has-text-grey">\${t.seg}</span></td>
-        \`;
+        tr.innerHTML = '<td><span class="tag is-info is-light monospace has-text-weight-bold">' + t.label + '</span></td>' +
+          '<td class="has-text-weight-bold has-text-light monospace">' + t.val.toFixed(2) + '%</td>' +
+          '<td class="monospace ' + spreadClass + '">' + spreadSign + spreadTo6M + ' bps</td>' +
+          '<td><span class="has-text-grey">' + t.seg + '</span></td>';
         tbody.appendChild(tr);
       });
     }
@@ -483,6 +458,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
     function renderSvgCurve(tenors) {
       const svg = document.getElementById('curve-svg');
       svg.innerHTML = '';
+
+      if (!tenors.length) return;
 
       const w = 800, h = 280;
       const padL = 60, padR = 40, padT = 30, padB = 40;
@@ -493,8 +470,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
       const minVal = Math.max(0, Math.floor(Math.min(...vals) * 10) / 10 - 0.2);
       const maxVal = Math.ceil(Math.max(...vals) * 10) / 10 + 0.2;
 
-      const getX = (idx) => padL + (idx / (tenors.length - 1)) * chartW;
-      const getY = (val) => padT + chartH - ((val - minVal) / (maxVal - minVal)) * chartH;
+      const getX = (idx) => padL + (idx / Math.max(1, tenors.length - 1)) * chartW;
+      const getY = (val) => padT + chartH - ((val - minVal) / Math.max(0.01, maxVal - minVal)) * chartH;
 
       // Draw Grid Lines (Y-Axis)
       const gridSteps = 4;
@@ -522,19 +499,17 @@ const HTML_CONTENT = `<!DOCTYPE html>
       }
 
       // Draw Area Fill Under Curve
-      let areaPathD = \`M \${getX(0)} \${padT + chartH} \`;
-      tenors.forEach((t, i) => {
-        areaPathD += \`L \${getX(i)} \${getY(t.val)} \`;
-      });
-      areaPathD += \`L \${getX(tenors.length - 1)} \${padT + chartH} Z\`;
+      let areaPathD = 'M ' + getX(0) + ' ' + (padT + chartH) + ' ';
+      for (let i = 0; i < tenors.length; i++) {
+        areaPathD += 'L ' + getX(i) + ' ' + getY(tenors[i].val) + ' ';
+      }
+      areaPathD += 'L ' + getX(tenors.length - 1) + ' ' + (padT + chartH) + ' Z';
 
       const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-      defs.innerHTML = \`
-        <linearGradient id="curveGrad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#58a6ff" stop-opacity="0.35"/>
-          <stop offset="100%" stop-color="#58a6ff" stop-opacity="0.0"/>
-        </linearGradient>
-      \`;
+      defs.innerHTML = '<linearGradient id="curveGrad" x1="0" y1="0" x2="0" y2="1">' +
+        '<stop offset="0%" stop-color="#58a6ff" stop-opacity="0.35"/>' +
+        '<stop offset="100%" stop-color="#58a6ff" stop-opacity="0.0"/>' +
+        '</linearGradient>';
       svg.appendChild(defs);
 
       const area = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -544,9 +519,9 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
       // Draw Curve Line
       let linePathD = '';
-      tenors.forEach((t, i) => {
-        linePathD += (i === 0 ? 'M ' : 'L ') + \`\${getX(i)} \${getY(t.val)} \`;
-      });
+      for (let i = 0; i < tenors.length; i++) {
+        linePathD += (i === 0 ? 'M ' : 'L ') + getX(i) + ' ' + getY(tenors[i].val) + ' ';
+      }
 
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       path.setAttribute('d', linePathD);
@@ -567,8 +542,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
         circle.setAttribute('fill', '#0d1117');
         circle.setAttribute('stroke', '#58a6ff');
         circle.setAttribute('stroke-width', '2.5');
-        circle.setAttribute('class', 'curve-point');
-        circle.innerHTML = \`<title>\${t.label}: \${t.val.toFixed(2)}%\${t.price ? ' (Price: $' + t.price.toFixed(2) + ')' : ''}</title>\`;
         svg.appendChild(circle);
 
         const valText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -718,20 +691,17 @@ const HTML_CONTENT = `<!DOCTYPE html>
     document.getElementById('btn-export').onclick = () => {
       if (currentType === 'curve' && yieldCurveData) {
         const c = yieldCurveData;
-        const csv = ['Tenor,Yield (% p.a.),Clean Price,AsOfDate',
-          \`6M,\${c['6M']},,\${c.date}\`,
-          \`1Y,\${c['1Y']},,\${c.date}\`,
-          \`2Y,\${c['2Y']},\${c.price_2Y || ''},\${c.date}\`,
-          \`5Y,\${c['5Y']},\${c.price_5Y || ''},\${c.date}\`,
-          \`10Y,\${c['10Y']},\${c.price_10Y || ''},\${c.date}\`,
-          \`15Y,\${c['15Y']},\${c.price_15Y || ''},\${c.date}\`,
-          \`20Y,\${c['20Y']},\${c.price_20Y || ''},\${c.date}\`,
-          \`30Y,\${c['30Y']},\${c.price_30Y || ''},\${c.date}\`,
-          \`50Y,\${c['50Y']},\${c.price_50Y || ''},\${c.date}\`
-        ].join('\\n');
-
+        const csvRows = ['Tenor,Yield (% p.a.),AsOfDate'];
+        const list = [
+          ['6M', c['6M']], ['1Y', c['1Y']], ['2Y', c['2Y']],
+          ['5Y', c['5Y']], ['10Y', c['10Y']], ['15Y', c['15Y']],
+          ['20Y', c['20Y']], ['30Y', c['30Y']], ['50Y', c['50Y']]
+        ];
+        list.forEach(item => {
+          csvRows.push(item[0] + ',' + (item[1] !== null ? item[1] : '') + ',' + c.date);
+        });
         const a = document.createElement('a');
-        a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+        a.href = URL.createObjectURL(new Blob([csvRows.join('\\n')], { type: 'text/csv' }));
         a.download = 'sgs_yield_curve_' + c.date.replace(/\\s+/g, '_') + '.csv';
         a.click();
         return;
@@ -751,6 +721,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       if (show) {
         document.getElementById('table-wrapper').classList.add('is-hidden');
         document.getElementById('curve-wrapper').classList.add('is-hidden');
+        document.getElementById('empty-state').classList.add('is-hidden');
       }
     }
 
