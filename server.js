@@ -9,6 +9,8 @@ const BASE_MAS_URL = 'https://eservices.mas.gov.sg/statistics/api/v1/bondsandbil
 const SECONDARY_MARKET_URL = 'https://eservices.mas.gov.sg/statistics/fdanet/BondPricesAndYields.aspx';
 const YIELD_CURVE_URL = 'https://eservices.mas.gov.sg/statistics/fdanet/SgsBenchmarkIssuePrices.aspx';
 
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
 // Helper: Parse dates in "YYYY-MM-DD" or "DD MMM YYYY"
 function parseFlexibleDate(str) {
   if (!str || str === '-' || str === 'N/A') return null;
@@ -31,9 +33,64 @@ function parseFlexibleDate(str) {
 // Helper: Format Date to "DD MMM YYYY"
 function formatDateStr(dateObj) {
   if (!dateObj || isNaN(dateObj.getTime())) return '-';
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const day = String(dateObj.getDate()).padStart(2, '0');
-  return `${day} ${months[dateObj.getMonth()]} ${dateObj.getFullYear()}`;
+  return `${day} ${MONTH_NAMES[dateObj.getMonth()]} ${dateObj.getFullYear()}`;
+}
+
+// Helper: Calculate Coupon Payment Schedule
+function getCouponPaymentInfo(secType, matDateObj, interestDate1, interestDate2) {
+  // 1. T-Bills: Zero-coupon discount securities, paid at maturity
+  if (secType.includes('T-Bill')) {
+    const matStr = matDateObj ? formatDateStr(matDateObj) : 'Maturity';
+    return {
+      summary: `At maturity (${matStr})`,
+      detail: 'Paid at maturity with face value (Zero-coupon)',
+      isTbill: true
+    };
+  }
+
+  // 2. SGS Bonds: Semi-annual coupons (every 6 months)
+  let day1, month1, day2, month2;
+
+  // Check explicit MAS interest dates (e.g., "01/05" and "01/11")
+  if (interestDate1 && interestDate1.includes('/')) {
+    const p1 = interestDate1.split('/');
+    day1 = parseInt(p1[0], 10);
+    month1 = parseInt(p1[1], 10) - 1;
+  }
+  if (interestDate2 && interestDate2.includes('/')) {
+    const p2 = interestDate2.split('/');
+    day2 = parseInt(p2[0], 10);
+    month2 = parseInt(p2[1], 10) - 1;
+  }
+
+  // If not provided in primary record, derive semi-annual cycle from maturity date
+  if ((day1 === undefined || isNaN(day1)) && matDateObj) {
+    day1 = matDateObj.getDate();
+    month1 = (matDateObj.getMonth() + 6) % 12;
+    day2 = matDateObj.getDate();
+    month2 = matDateObj.getMonth();
+
+    if (month1 > month2) {
+      const temp = month1; month1 = month2; month2 = temp;
+    }
+  }
+
+  if (day1 !== undefined && month1 !== undefined && day2 !== undefined && month2 !== undefined) {
+    const d1 = `${String(day1).padStart(2, '0')} ${MONTH_NAMES[month1]}`;
+    const d2 = `${String(day2).padStart(2, '0')} ${MONTH_NAMES[month2]}`;
+    return {
+      summary: `Every 6M (${d1} & ${d2})`,
+      detail: `Paid semi-annually on ${d1} and ${d2} until maturity`,
+      isTbill: false
+    };
+  }
+
+  return {
+    summary: 'Every 6 months',
+    detail: 'Paid semi-annually from issue until maturity',
+    isTbill: false
+  };
 }
 
 // Helper: Linear Interpolation for Yield Curve based on duration (years)
@@ -170,7 +227,7 @@ function fetchMasApi(targetUrl) {
   });
 }
 
-// 4. Build Master Table Logic
+// 4. Build Master Table Data
 async function getMasterTableData() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -205,7 +262,6 @@ async function getMasterTableData() {
     let matDateObj = parseFlexibleDate(r.maturity_date);
     const issueDateObj = parseFlexibleDate(r.issue_date);
 
-    // Estimate maturity date from tenor if not explicitly listed
     if (!matDateObj && issueDateObj && r.auction_tenor) {
       const tenorYears = parseFloat(r.auction_tenor) || 0.5;
       matDateObj = new Date(issueDateObj.getTime() + tenorYears * 365.25 * 86400000);
@@ -213,6 +269,7 @@ async function getMasterTableData() {
 
     const durationYears = matDateObj ? Math.max(0.1, (matDateObj - today) / (365.25 * 86400000)) : (parseFloat(r.auction_tenor) || 0.5);
     const indicativeYield = calculateIndicativeYield(durationYears, yieldCurve);
+    const couponInfo = getCouponPaymentInfo(r._secType, matDateObj, null, null);
 
     masterList.push({
       secType: r._secType,
@@ -223,6 +280,9 @@ async function getMasterTableData() {
       auctionDate: formatDateStr(auctionDateObj),
       auctionTimestamp: auctionDateObj.getTime(),
       issueDate: issueDateObj ? formatDateStr(issueDateObj) : (r.issue_date || '-'),
+      couponSchedule: couponInfo.summary,
+      couponDetail: couponInfo.detail,
+      isTbill: couponInfo.isTbill,
       durationYears: parseFloat(durationYears.toFixed(2)),
       indicativeYield: indicativeYield !== null ? indicativeYield : null
     });
@@ -235,6 +295,7 @@ async function getMasterTableData() {
 
     const durationYears = Math.max(0.1, (matDateObj - today) / (365.25 * 86400000));
     const indicativeYield = calculateIndicativeYield(durationYears, yieldCurve);
+    const couponInfo = getCouponPaymentInfo('Secondary SGS', matDateObj, b.interestDate1, b.interestDate2);
 
     masterList.push({
       secType: 'Secondary SGS',
@@ -245,12 +306,14 @@ async function getMasterTableData() {
       auctionDate: '-',
       auctionTimestamp: 0,
       issueDate: b.interestDate1 ? `Int: ${b.interestDate1}, ${b.interestDate2}` : '-',
+      couponSchedule: couponInfo.summary,
+      couponDetail: couponInfo.detail,
+      isTbill: couponInfo.isTbill,
       durationYears: parseFloat(durationYears.toFixed(2)),
       indicativeYield: indicativeYield !== null ? indicativeYield : (parseFloat(b.yieldPct) || null)
     });
   });
 
-  // Sort chronologically by maturity date
   masterList.sort((a, b) => (a.maturityTimestamp || 0) - (b.maturityTimestamp || 0));
 
   return {
@@ -260,14 +323,14 @@ async function getMasterTableData() {
   };
 }
 
-// 5. Frontend HTML
+// 5. Frontend HTML Application
 const HTML_CONTENT = `<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#12161a">
-  <title>LadderMaker - Master Table, SGS & Yield Curve</title>
+  <title>LadderMaker - Master Table with Coupon Schedules</title>
   
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.2/css/bulma.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -290,7 +353,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
 </head>
 <body>
 
-  <!-- Navbar -->
   <nav class="navbar is-dark" style="border-bottom: 1px solid #30363d;">
     <div class="container">
       <div class="navbar-brand">
@@ -312,12 +374,11 @@ const HTML_CONTENT = `<!DOCTYPE html>
   <main class="section main-container">
     <div class="container">
 
-      <!-- Header Level -->
       <div class="level mb-4">
         <div class="level-left">
           <div>
             <h1 class="title is-4 has-text-light" id="page-title">Singapore Government Securities</h1>
-            <p class="subtitle is-6 has-text-grey" id="page-subtitle">Track primary auctions, secondary market bonds, and indicative yield curve interpolation</p>
+            <p class="subtitle is-6 has-text-grey" id="page-subtitle">Track primary auctions, secondary bonds, coupon payment dates, and yield curve interpolation</p>
           </div>
         </div>
         <div class="level-right">
@@ -328,7 +389,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- Quick Metrics Panel -->
       <div class="columns is-multiline mb-4" id="metrics-panel">
         <div class="column is-3">
           <div class="box summary-card py-3">
@@ -356,7 +416,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- Navigation Tabs & Year Selector -->
       <div class="level mb-3">
         <div class="level-left">
           <div class="tabs is-boxed is-small mb-0" id="category-tabs">
@@ -382,21 +441,18 @@ const HTML_CONTENT = `<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- Search Box -->
       <div class="field mb-4" id="search-wrapper">
         <p class="control has-icons-left">
-          <input id="search-input" class="input is-rounded is-dark" type="text" placeholder="Search by issue code, ISIN, maturity date, yield...">
+          <input id="search-input" class="input is-rounded is-dark" type="text" placeholder="Search by issue code, ISIN, maturity date, coupon dates, yield...">
           <span class="icon is-small is-left"><i class="fas fa-search"></i></span>
         </p>
       </div>
 
-      <!-- Loading Spinner -->
       <div id="status-container" class="has-text-centered py-6">
         <span class="icon is-large has-text-info"><i class="fas fa-2x fa-spinner fa-spin"></i></span>
         <p class="mt-3 has-text-grey" id="status-text">Fetching data from MAS...</p>
       </div>
 
-      <!-- Master / Standard Table Section -->
       <div id="table-wrapper" class="table-container is-hidden">
         <table class="table is-fullwidth is-hoverable is-narrow">
           <thead><tr id="table-head-row"></tr></thead>
@@ -404,7 +460,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
         </table>
       </div>
 
-      <!-- Dedicated Yield Curve View -->
       <div id="curve-wrapper" class="is-hidden">
         <div class="box chart-container mb-4">
           <div class="level mb-2">
@@ -437,7 +492,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- Empty State -->
       <div id="empty-state" class="notification is-dark has-text-centered is-hidden mt-4">
         <i class="fa-solid fa-circle-info mr-2"></i> No records found matching the criteria.
       </div>
@@ -540,7 +594,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       }
     }
 
-    // 3. Render Master Table (6 Specific Columns Requested)
+    // 3. Render Master Table (With Coupon Payment Dates)
     function updateMasterMetrics() {
       document.getElementById('stat-label-1').textContent = 'Total Valid Issues';
       document.getElementById('stat-val-1').textContent = allRecords.length;
@@ -565,9 +619,10 @@ const HTML_CONTENT = `<!DOCTYPE html>
         { id: 'issueCode', title: 'COL 1: ISSUE CODE' },
         { id: 'isin', title: 'COL 2: ISIN' },
         { id: 'maturityDate', title: 'COL 3: MATURITY DATE' },
-        { id: 'auctionDate', title: 'COL 4: AUCTION DATE (IF PRIMARY)' },
+        { id: 'auctionDate', title: 'COL 4: AUCTION DATE' },
         { id: 'issueDate', title: 'COL 5: ISSUE DATE' },
-        { id: 'indicativeYield', title: 'COL 6: INDICATIVE YIELD (% P.A.)' }
+        { id: 'couponSchedule', title: 'COL 6: COUPON PAYMENT DATES' },
+        { id: 'indicativeYield', title: 'COL 7: INDICATIVE YIELD (% P.A.)' }
       ];
 
       cols.forEach(c => {
@@ -602,7 +657,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       displayedRecords.forEach(r => {
         const tr = document.createElement('tr');
 
-        // Col 1: Issue Code + Tag
+        // Col 1: Issue Code + Badge
         const tagClass = r.secType === 'Primary SGS' ? 'is-primary' : (r.secType === 'Primary T-Bill' ? 'is-info' : 'is-warning');
         const col1 = '<td><span class="monospace has-text-weight-bold has-text-light">' + r.issueCode + '</span> <span class="tag is-small ml-2 ' + tagClass + '">' + r.secType + '</span></td>';
 
@@ -612,17 +667,26 @@ const HTML_CONTENT = `<!DOCTYPE html>
         // Col 3: Maturity Date
         const col3 = '<td class="has-text-weight-medium">' + r.maturityDate + '</td>';
 
-        // Col 4: Auction Date (if primary)
+        // Col 4: Auction Date
         const col4 = '<td>' + (r.auctionDate !== '-' ? '<span class="has-text-info monospace"><i class="fa-regular fa-calendar-check mr-1"></i>' + r.auctionDate + '</span>' : '<span class="has-text-grey">-</span>') + '</td>';
 
         // Col 5: Issue Date
         const col5 = '<td class="has-text-grey-light">' + r.issueDate + '</td>';
 
-        // Col 6: Indicative Yield
-        const yieldVal = r.indicativeYield !== null ? r.indicativeYield.toFixed(2) + '%' : '<span class="has-text-grey">-</span>';
-        const col6 = '<td><span class="tag is-success is-light monospace has-text-weight-bold is-medium">' + yieldVal + '</span> <span class="is-size-7 has-text-grey ml-1">(' + r.durationYears + 'Y)</span></td>';
+        // Col 6: Coupon Payment Dates
+        let col6Content = '';
+        if (r.isTbill) {
+          col6Content = '<span class="tag is-dark is-light"><i class="fa-solid fa-flag-checkered mr-1 has-text-info"></i> ' + r.couponSchedule + '</span>';
+        } else {
+          col6Content = '<span class="tag is-primary is-light has-text-weight-bold"><i class="fa-solid fa-arrows-rotate mr-1"></i> ' + r.couponSchedule + '</span>';
+        }
+        const col6 = '<td>' + col6Content + '</td>';
 
-        tr.innerHTML = col1 + col2 + col3 + col4 + col5 + col6;
+        // Col 7: Indicative Yield
+        const yieldVal = r.indicativeYield !== null ? r.indicativeYield.toFixed(2) + '%' : '<span class="has-text-grey">-</span>';
+        const col7 = '<td><span class="tag is-success is-light monospace has-text-weight-bold is-medium">' + yieldVal + '</span> <span class="is-size-7 has-text-grey ml-1">(' + r.durationYears + 'Y)</span></td>';
+
+        tr.innerHTML = col1 + col2 + col3 + col4 + col5 + col6 + col7;
         tbody.appendChild(tr);
       });
     }
@@ -911,11 +975,11 @@ const HTML_CONTENT = `<!DOCTYPE html>
     document.getElementById('btn-export').onclick = () => {
       if (currentType === 'master') {
         if (!displayedRecords.length) return;
-        const csvRows = ['Type,IssueCode,ISIN,MaturityDate,AuctionDate,IssueDate,DurationYears,IndicativeYield'];
+        const csvRows = ['Type,IssueCode,ISIN,MaturityDate,AuctionDate,IssueDate,CouponPaymentDates,DurationYears,IndicativeYield'];
         displayedRecords.forEach(r => {
           csvRows.push([
             r.secType, r.issueCode, r.isin, r.maturityDate,
-            r.auctionDate, r.issueDate, r.durationYears,
+            r.auctionDate, r.issueDate, r.couponSchedule, r.durationYears,
             r.indicativeYield !== null ? r.indicativeYield + '%' : ''
           ].map(x => '"' + (x ?? '') + '"').join(','));
         });
