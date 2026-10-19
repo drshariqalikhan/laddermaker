@@ -326,7 +326,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#12161a">
-  <title>LadderMaker - Singapore Government Bond Ladder & Cashflow Timeline</title>
+  <title>LadderMaker - Singapore Government Bond Ladder & Cashflows</title>
   
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.2/css/bulma.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -507,22 +507,37 @@ const HTML_CONTENT = `<!DOCTYPE html>
         <p class="mt-3 has-text-grey" id="status-text">Fetching data from MAS...</p>
       </div>
 
-      <!-- Bond Ladder View: Timeline + Table -->
+      <!-- Bond Ladder View: Timeline Toggle + Timeline + Table -->
       <div id="ladder-view" class="is-hidden">
         
-        <!-- Horizontal Scrollable Cashflow Timeline -->
-        <div class="box ladder-card mb-4 p-4">
+        <!-- Toggle Bar for Cashflow Timeline -->
+        <div class="level mb-3">
+          <div class="level-left">
+            <h3 class="subtitle is-6 has-text-weight-bold has-text-light mb-0">
+              <i class="fa-solid fa-layer-group mr-2 has-text-success"></i> Ladder Portfolio Schedule
+            </h3>
+          </div>
+          <div class="level-right">
+            <button id="btn-toggle-timeline" class="button is-small is-info is-outlined">
+              <span class="icon"><i class="fa-solid fa-timeline"></i></span>
+              <span id="btn-timeline-text">Show Cash Flow Timeline</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Horizontal Scrollable Cashflow Timeline (Hidden by default, shown upon clicking button) -->
+        <div id="ladder-timeline-card" class="box ladder-card mb-4 p-4 is-hidden">
           <div class="level mb-2">
             <div class="level-left">
               <h3 class="subtitle is-6 has-text-weight-bold has-text-info mb-0">
-                <i class="fa-solid fa-timeline mr-2"></i> Cashflow Timeline & Payment Inflows
+                <i class="fa-solid fa-timeline mr-2"></i> Cash Flow Timeline (Coupons & Maturity Returns)
               </h3>
             </div>
             <div class="level-right">
               <span class="tag is-dark monospace is-size-7" id="timeline-count-badge">0 Scheduled Payments</span>
             </div>
           </div>
-          <p class="is-size-7 has-text-grey mb-3">Scroll horizontally to view upcoming semi-annual coupons and principal payouts over your ladder horizon.</p>
+          <p class="is-size-7 has-text-grey mb-3">Scroll horizontally to view all upcoming coupon payouts and principal maturity returns coming in over your horizon.</p>
           
           <div style="overflow-x: auto; padding: 15px 5px 10px 5px; -webkit-overflow-scrolling: touch;">
             <div style="position: relative; min-width: max-content; padding-bottom: 5px;">
@@ -610,6 +625,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
     let masterDataCache = null;
     let yieldCurveData = null;
     let ladderSchedule = [];
+    let isTimelineVisible = false;
     let sortColumn = null;
     let sortAsc = true;
 
@@ -778,7 +794,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       return years.toFixed(years % 1 === 0 ? 0 : 1) + ' Year' + (years > 1 ? 's' : '');
     }
 
-    // 4. Generate & Render Scrollable Cashflow Timeline with Arrows
+    // 4. Generate & Render Scrollable Cashflow Timeline with Coupons & Maturity Inflows
     function generateLadderCashflows(schedule) {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -791,21 +807,23 @@ const HTML_CONTENT = `<!DOCTYPE html>
         const matDate = parseFlexibleDate(b.maturityDate);
 
         if (b.isTbill) {
-          // T-Bill: Total principal + discount return at maturity
+          // T-Bill Maturity Payment (Total Principal + Discount Return)
           const totalPayout = C + (C * (y / 100) * (b.durationYears || 0.5));
           if (matDate && matDate > today) {
             cashflows.push({
               dateObj: matDate,
               dateStr: formatDateStr(matDate),
               amount: Math.round(totalPayout),
+              principalAmt: Math.round(C),
+              interestAmt: Math.round(totalPayout - C),
               issueCode: b.issueCode,
               secType: b.secType,
-              type: 'T-Bill Maturity',
+              type: 'T-Bill Maturity Payout',
               isMaturity: true
             });
           }
         } else {
-          // SGS Bond: Semi-annual coupons + principal at maturity
+          // SGS Bond: Semi-annual coupon payments + Full Principal Redemption at Maturity
           let d1 = 1, m1 = 1, d2 = 1, m2 = 7;
           if (b.couponSchedule && b.couponSchedule.includes('&')) {
             const match = b.couponSchedule.match(/\((\d{1,2})\s+([A-Za-z]{3})\s+&\s+(\d{1,2})\s+([A-Za-z]{3})\)/);
@@ -826,6 +844,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
           const startYear = today.getFullYear();
           const endYear = matDate ? matDate.getFullYear() : startYear + 5;
 
+          // Add Semi-Annual Coupon Inflows
           for (let yr = startYear; yr <= endYear; yr++) {
             [ { d: d1, m: m1 }, { d: d2, m: m2 } ].forEach(item => {
               if (item.m >= 0) {
@@ -839,7 +858,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
                     amount: semiCouponAmt,
                     issueCode: b.issueCode,
                     secType: b.secType,
-                    type: 'Coupon Payment',
+                    type: 'Coupon Payout',
                     isMaturity: false
                   });
                 }
@@ -847,20 +866,24 @@ const HTML_CONTENT = `<!DOCTYPE html>
             });
           }
 
+          // Add Maturity Inflow (Principal Return + Final Coupon)
           if (matDate && matDate > today) {
             cashflows.push({
               dateObj: matDate,
               dateStr: formatDateStr(matDate),
               amount: Math.round(C + semiCouponAmt),
+              principalAmt: Math.round(C),
+              interestAmt: semiCouponAmt,
               issueCode: b.issueCode,
               secType: b.secType,
-              type: 'Principal + Final Coupon',
+              type: 'Maturity (Principal + Coupon)',
               isMaturity: true
             });
           }
         }
       });
 
+      // Sort chronologically by date
       cashflows.sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime());
       return cashflows;
     }
@@ -878,17 +901,24 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
       cashflows.forEach(cf => {
         const node = document.createElement('div');
-        node.style.cssText = 'display: inline-flex; flex-direction: column; align-items: center; min-width: 145px; text-align: center; margin-right: 20px;';
+        node.style.cssText = 'display: inline-flex; flex-direction: column; align-items: center; min-width: 155px; text-align: center; margin-right: 20px;';
 
         const badgeClass = cf.isMaturity ? 'is-success' : 'is-info';
         const arrowColor = cf.isMaturity ? '#48c78e' : '#58a6ff';
         const dotColor = cf.isMaturity ? '#48c78e' : '#58a6ff';
+        const amountColor = cf.isMaturity ? 'has-text-success' : 'has-text-info';
+
+        let subDetail = '';
+        if (cf.isMaturity && cf.principalAmt) {
+          subDetail = '<div class="is-size-7 has-text-grey mt-1">Principal: $' + cf.principalAmt.toLocaleString() + '</div>';
+        }
 
         node.innerHTML = 
           '<div class="box p-2 mb-2" style="background: #21262d; border: 1px solid #30363d; border-radius: 6px; width: 100%; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">' +
-            '<div class="is-size-6 monospace has-text-weight-bold ' + (cf.isMaturity ? 'has-text-success' : 'has-text-info') + '">+$' + cf.amount.toLocaleString() + '</div>' +
+            '<div class="is-size-6 monospace has-text-weight-bold ' + amountColor + '">+$' + cf.amount.toLocaleString() + '</div>' +
             '<div class="is-size-7 has-text-weight-semibold has-text-light mt-1">' + cf.dateStr + '</div>' +
             '<div class="is-size-7 monospace has-text-grey-light">' + cf.issueCode + '</div>' +
+            subDetail +
             '<span class="tag is-small mt-1 ' + badgeClass + ' is-light" style="font-size: 0.65rem; height: 1.5em; padding: 0 5px;">' + cf.type + '</span>' +
           '</div>' +
           '<div style="color: ' + arrowColor + '; font-size: 15px; margin-bottom: -6px; z-index: 2;">' +
@@ -900,6 +930,17 @@ const HTML_CONTENT = `<!DOCTYPE html>
         container.appendChild(node);
       });
     }
+
+    // Toggle Button Handler for Timeline
+    document.getElementById('btn-toggle-timeline').onclick = () => {
+      isTimelineVisible = !isTimelineVisible;
+      const card = document.getElementById('ladder-timeline-card');
+      card.classList.toggle('is-hidden', !isTimelineVisible);
+      document.getElementById('btn-timeline-text').textContent = isTimelineVisible ? 'Hide Cash Flow Timeline' : 'Show Cash Flow Timeline';
+      const btn = document.getElementById('btn-toggle-timeline');
+      btn.classList.toggle('is-info', !isTimelineVisible);
+      btn.classList.toggle('is-success', isTimelineVisible);
+    };
 
     function renderLadderTable(totalCapital) {
       const tbody = document.getElementById('ladder-table-body');
