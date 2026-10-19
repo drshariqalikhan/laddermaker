@@ -1,11 +1,64 @@
 const http = require('http');
 const https = require('https');
 const url = require('url');
+const axios = require('axios');
+const cheerio = require('cheerio');
 
 const PORT = process.env.PORT || 3000;
 const BASE_MAS_URL = 'https://eservices.mas.gov.sg/statistics/api/v1/bondsandbills/m';
+const SECONDARY_MARKET_URL = 'https://eservices.mas.gov.sg/statistics/fdanet/BondPricesAndYields.aspx';
 
-// Helper function to query MAS API using native HTTPS
+// 1. Scrape MAS Secondary Market Bonds (Using your Cheerio parser)
+async function scrapeMASSecondaryMarket() {
+  try {
+    const { data } = await axios.get(SECONDARY_MARKET_URL, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      },
+      timeout: 10000
+    });
+
+    const $ = cheerio.load(data);
+    const bonds = [];
+
+    $('tr').each((_, tr) => {
+      const tds = $(tr).find('td');
+
+      if (tds.length >= 9) {
+        const row = [];
+        tds.each((_, td) => {
+          row.push($(td).text().replace(/\s+/g, ' ').trim());
+        });
+
+        const issueCode = row[2];
+
+        // Skip header/empty rows
+        if (!issueCode || issueCode.length < 4) return;
+
+        bonds.push({
+          _category: 'Secondary SGS',
+          benchmark: row[0] || '-',
+          issueCode: row[2],
+          isin: row[3],
+          couponRate: row[4],
+          interestDate1: row[5],
+          interestDate2: row[6],
+          maturityDate: row[7],
+          issueSizeMillion: row[8],
+          bidPrice: row[9] || row[1] || '-',
+          yieldPct: row[10] || '-'
+        });
+      }
+    });
+
+    return bonds;
+  } catch (err) {
+    console.error('Error scraping secondary market bonds:', err.message);
+    return [];
+  }
+}
+
+// 2. Fetch MAS Issuance Calendar API
 function fetchMasApi(targetUrl) {
   return new Promise((resolve, reject) => {
     https.get(encodeURI(targetUrl), (res) => {
@@ -23,13 +76,14 @@ function fetchMasApi(targetUrl) {
   });
 }
 
+// 3. Frontend HTML Template
 const HTML_CONTENT = `<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#12161a">
-  <title>LadderMaker - SGS, T-Bills & SSB Calendar</title>
+  <title>LadderMaker - SGS Secondary Market & Issuances</title>
   
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.2/css/bulma.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -74,12 +128,12 @@ const HTML_CONTENT = `<!DOCTYPE html>
   <main class="section main-container">
     <div class="container">
 
-      <!-- Header -->
+      <!-- Title Level -->
       <div class="level mb-4">
         <div class="level-left">
           <div>
-            <h1 class="title is-4 has-text-light">MAS Issuance Calendar</h1>
-            <p class="subtitle is-6 has-text-grey">Track Singapore Government Securities (SGS), Treasury Bills (T-Bills), and Savings Bonds (SSB)</p>
+            <h1 class="title is-4 has-text-light" id="page-title">Singapore Government Securities</h1>
+            <p class="subtitle is-6 has-text-grey" id="page-subtitle">Track primary auctions and secondary market prices & yields</p>
           </div>
         </div>
         <div class="level-right">
@@ -91,52 +145,51 @@ const HTML_CONTENT = `<!DOCTYPE html>
       </div>
 
       <!-- Quick Metrics -->
-      <div class="columns is-multiline mb-4">
+      <div class="columns is-multiline mb-4" id="metrics-panel">
         <div class="column is-3">
           <div class="box summary-card py-3">
-            <p class="heading has-text-grey">Total Issuances</p>
+            <p class="heading has-text-grey">Securities Listed</p>
             <p class="title is-4 has-text-light" id="stat-total">0</p>
           </div>
         </div>
         <div class="column is-3">
           <div class="box summary-card py-3">
-            <p class="heading has-text-grey">SGS Bonds</p>
-            <p class="title is-4 has-text-primary" id="stat-sgs">0</p>
+            <p class="heading has-text-grey" id="stat-label-2">SGS Bonds</p>
+            <p class="title is-4 has-text-primary" id="stat-val-2">0</p>
           </div>
         </div>
         <div class="column is-3">
           <div class="box summary-card py-3">
-            <p class="heading has-text-grey">T-Bills</p>
-            <p class="title is-4 has-text-info" id="stat-tbill">0</p>
+            <p class="heading has-text-grey" id="stat-label-3">T-Bills</p>
+            <p class="title is-4 has-text-info" id="stat-val-3">0</p>
           </div>
         </div>
         <div class="column is-3">
           <div class="box summary-card py-3">
-            <p class="heading has-text-grey">Savings Bonds (SSB)</p>
-            <p class="title is-4 has-text-success" id="stat-ssb">0</p>
+            <p class="heading has-text-grey" id="stat-label-4">SSB Issues</p>
+            <p class="title is-4 has-text-success" id="stat-val-4">0</p>
           </div>
         </div>
       </div>
 
-      <!-- Controls: Tabs for Security Types & Year Selector -->
+      <!-- Filter Controls: Tabs -->
       <div class="level mb-3">
         <div class="level-left">
           <div class="tabs is-boxed is-small mb-0" id="category-tabs">
             <ul>
-              <li class="is-active" data-type="all"><a><i class="fa-solid fa-list mr-2"></i> All</a></li>
+              <li class="is-active" data-type="all"><a><i class="fa-solid fa-list mr-2"></i> All Primary</a></li>
               <li data-type="sgs"><a><i class="fa-solid fa-building-columns mr-2"></i> SGS Bonds</a></li>
               <li data-type="tbill"><a><i class="fa-solid fa-money-bill-trend-up mr-2"></i> T-Bills</a></li>
               <li data-type="ssb"><a><i class="fa-solid fa-piggy-bank mr-2"></i> SSB</a></li>
+              <li data-type="secondary"><a><i class="fa-solid fa-chart-line mr-2 has-text-warning"></i> Secondary Market</a></li>
             </ul>
           </div>
         </div>
-        <div class="level-right">
+        <div class="level-right" id="year-wrapper">
           <div class="field is-grouped">
             <div class="control">
               <div class="select is-small is-dark">
-                <select id="year-select">
-                  <!-- Populated by JS -->
-                </select>
+                <select id="year-select"></select>
               </div>
             </div>
           </div>
@@ -146,7 +199,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       <!-- Search Box -->
       <div class="field mb-4">
         <p class="control has-icons-left">
-          <input id="search-input" class="input is-rounded is-dark" type="text" placeholder="Search by issue code, date, tenor, ISIN...">
+          <input id="search-input" class="input is-rounded is-dark" type="text" placeholder="Search by issue code, ISIN, benchmark, date...">
           <span class="icon is-small is-left"><i class="fas fa-search"></i></span>
         </p>
       </div>
@@ -154,7 +207,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       <!-- Loading Spinner -->
       <div id="status-container" class="has-text-centered py-6">
         <span class="icon is-large has-text-info"><i class="fas fa-2x fa-spinner fa-spin"></i></span>
-        <p class="mt-3 has-text-grey">Fetching issuance data from MAS...</p>
+        <p class="mt-3 has-text-grey" id="status-text">Fetching data from MAS & SGX...</p>
       </div>
 
       <!-- Table Section -->
@@ -167,7 +220,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
       <!-- Empty State -->
       <div id="empty-state" class="notification is-dark has-text-centered is-hidden mt-4">
-        <i class="fa-solid fa-circle-info mr-2"></i> No matching issuances found for this criteria.
+        <i class="fa-solid fa-circle-info mr-2"></i> No records found matching the criteria.
       </div>
     </div>
   </main>
@@ -183,7 +236,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
     // 1. Initialize PWA
     (function initPWA() {
       const manifest = {
-        name: "LadderMaker - MAS SGS, T-Bill & SSB",
+        name: "LadderMaker - SGS & Secondary Market",
         short_name: "LadderMaker",
         start_url: "./",
         display: "standalone",
@@ -203,7 +256,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
         navigator.serviceWorker.register(URL.createObjectURL(new Blob([sw], { type: 'application/javascript' }))).catch(() => {});
       }
 
-      // Populate year selector: currentYear - 1 up to currentYear + 1
       const yearSelect = document.getElementById('year-select');
       for (let y = currentYear + 1; y >= currentYear - 2; y--) {
         const opt = document.createElement('option');
@@ -214,60 +266,87 @@ const HTML_CONTENT = `<!DOCTYPE html>
       }
     })();
 
-    // 2. Load Data from Backend
+    // 2. Fetch Data from Backend
     async function loadData() {
       showLoading(true);
+      const isSecondary = currentType === 'secondary';
+      document.getElementById('year-wrapper').style.visibility = isSecondary ? 'hidden' : 'visible';
+
       try {
-        const res = await axios.get('/api/calendar?type=' + currentType + '&year=' + currentYear);
+        const endpoint = isSecondary 
+          ? '/api/secondary-market'
+          : '/api/calendar?type=' + currentType + '&year=' + currentYear;
+
+        const res = await axios.get(endpoint);
         allRecords = res.data || [];
         displayedRecords = [...allRecords];
 
-        updateMetrics();
-        renderHeaders();
-        renderBody();
+        updateMetrics(isSecondary);
+        renderHeaders(isSecondary);
+        renderBody(isSecondary);
         showLoading(false);
       } catch (err) {
         document.getElementById('status-container').innerHTML = '<div class="notification is-danger is-light">' + err.message + '</div>';
       }
     }
 
-    function updateMetrics() {
+    function updateMetrics(isSecondary) {
       document.getElementById('stat-total').textContent = allRecords.length;
-      document.getElementById('stat-sgs').textContent = allRecords.filter(r => r._category === 'SGS Bond').length;
-      document.getElementById('stat-tbill').textContent = allRecords.filter(r => r._category === 'T-Bill').length;
-      document.getElementById('stat-ssb').textContent = allRecords.filter(r => r._category === 'SSB').length;
+
+      if (isSecondary) {
+        document.getElementById('stat-label-2').textContent = 'Benchmark Bonds';
+        document.getElementById('stat-val-2').textContent = allRecords.filter(r => r.benchmark && r.benchmark !== '-').length;
+
+        document.getElementById('stat-label-3').textContent = 'With Bid Price';
+        document.getElementById('stat-val-3').textContent = allRecords.filter(r => r.bidPrice && r.bidPrice !== '-').length;
+
+        document.getElementById('stat-label-4').textContent = 'Total Size (S$M)';
+        const totalSize = allRecords.reduce((acc, r) => acc + (parseFloat(r.issueSizeMillion) || 0), 0);
+        document.getElementById('stat-val-4').textContent = totalSize ? '$' + Math.round(totalSize).toLocaleString() : 'N/A';
+      } else {
+        document.getElementById('stat-label-2').textContent = 'SGS Bonds';
+        document.getElementById('stat-val-2').textContent = allRecords.filter(r => r._category === 'SGS Bond').length;
+
+        document.getElementById('stat-label-3').textContent = 'T-Bills';
+        document.getElementById('stat-val-3').textContent = allRecords.filter(r => r._category === 'T-Bill').length;
+
+        document.getElementById('stat-label-4').textContent = 'SSB Issues';
+        document.getElementById('stat-val-4').textContent = allRecords.filter(r => r._category === 'SSB').length;
+      }
     }
 
-    // 3. Render Table Headers
-    const PRIORITY_KEYS = ['_category', 'issue_code', 'ann_date', 'auction_date', 'open_date', 'close_date', 'issue_date', 'maturity_date', 'auction_tenor', 'status'];
-
-    function renderHeaders() {
+    // 3. Render Headers
+    function renderHeaders(isSecondary) {
       const row = document.getElementById('table-head-row');
       row.innerHTML = '';
       if (!allRecords.length) return;
 
-      // Filter keys so _category is first, followed by key dates
-      const recordKeys = Object.keys(allRecords[0]);
-      const keys = [...new Set([...PRIORITY_KEYS.filter(k => recordKeys.includes(k)), ...recordKeys])];
+      const keys = isSecondary
+        ? ['benchmark', 'issueCode', 'isin', 'couponRate', 'maturityDate', 'issueSizeMillion', 'bidPrice', 'yieldPct', 'interestDate1', 'interestDate2']
+        : ['_category', 'issue_code', 'ann_date', 'auction_date', 'open_date', 'close_date', 'issue_date', 'maturity_date', 'auction_tenor', 'status'];
 
       keys.forEach(k => {
         const th = document.createElement('th');
-        let label = k.replace(/_/g, ' ').toUpperCase();
+        let label = k.replace(/_/g, ' ').replace(/([A-Z])/g, ' $1').toUpperCase();
         if (k === '_category') label = 'SECURITY';
+        if (k === 'issueSizeMillion') label = 'SIZE (S$M)';
+        if (k === 'bidPrice') label = 'BUYING / BID PRICE';
+        if (k === 'yieldPct') label = 'CLOSING YIELD';
+        
         th.innerHTML = '<span>' + label + '</span> <i class="fa-solid fa-sort ml-1 has-text-grey-dark"></i>';
         
         th.onclick = () => {
           sortAsc = sortColumn === k ? !sortAsc : true;
           sortColumn = k;
           displayedRecords.sort((a, b) => sortAsc ? String(a[k] ?? '').localeCompare(String(b[k] ?? '')) : String(b[k] ?? '').localeCompare(String(a[k] ?? '')));
-          renderBody();
+          renderBody(isSecondary);
         };
         row.appendChild(th);
       });
     }
 
-    // 4. Render Table Body
-    function renderBody() {
+    // 4. Render Body
+    function renderBody(isSecondary) {
       const tbody = document.getElementById('table-body');
       tbody.innerHTML = '';
       if (!displayedRecords.length) {
@@ -276,24 +355,27 @@ const HTML_CONTENT = `<!DOCTYPE html>
       }
       document.getElementById('empty-state').classList.add('is-hidden');
 
-      const recordKeys = Object.keys(allRecords[0]);
-      const keys = [...new Set([...PRIORITY_KEYS.filter(k => recordKeys.includes(k)), ...recordKeys])];
+      const keys = isSecondary
+        ? ['benchmark', 'issueCode', 'isin', 'couponRate', 'maturityDate', 'issueSizeMillion', 'bidPrice', 'yieldPct', 'interestDate1', 'interestDate2']
+        : ['_category', 'issue_code', 'ann_date', 'auction_date', 'open_date', 'close_date', 'issue_date', 'maturity_date', 'auction_tenor', 'status'];
 
       displayedRecords.forEach(r => {
         const tr = document.createElement('tr');
         keys.forEach(k => {
           const td = document.createElement('td');
-          const val = r[k] ?? '';
+          const val = r[k] ?? '-';
 
           if (k === '_category') {
             const badgeClass = val === 'SGS Bond' ? 'is-primary' : val === 'T-Bill' ? 'is-info' : 'is-success';
             td.innerHTML = '<span class="tag is-small ' + badgeClass + '">' + val + '</span>';
+          } else if (k === 'benchmark' && val !== '-') {
+            td.innerHTML = '<span class="tag is-small is-warning is-light has-text-weight-bold">' + val + '</span>';
           } else if (k.toLowerCase().includes('status')) {
             const isClosed = /closed|ended/i.test(val);
             const isOpen = /open|upcoming/i.test(val);
             const tagClass = isOpen ? 'is-success' : isClosed ? 'is-dark' : 'is-info';
             td.innerHTML = '<span class="tag is-small ' + tagClass + '">' + (val || 'UPCOMING') + '</span>';
-          } else if (k.toLowerCase().includes('code')) {
+          } else if (k === 'issueCode' || k === 'isin' || k.toLowerCase().includes('code')) {
             td.innerHTML = '<span class="monospace has-text-info-light">' + val + '</span>';
           } else {
             td.textContent = val;
@@ -304,7 +386,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       });
     }
 
-    // 5. Tabs & Year Filter Listeners
+    // 5. Tabs & Search
     document.querySelectorAll('#category-tabs li').forEach(tab => {
       tab.onclick = () => {
         document.querySelectorAll('#category-tabs li').forEach(t => t.classList.remove('is-active'));
@@ -319,14 +401,13 @@ const HTML_CONTENT = `<!DOCTYPE html>
       loadData();
     };
 
-    // 6. Search Filter
     document.getElementById('search-input').oninput = (e) => {
       const q = e.target.value.toLowerCase().trim();
       displayedRecords = allRecords.filter(r => Object.values(r).some(v => String(v).toLowerCase().includes(q)));
-      renderBody();
+      renderBody(currentType === 'secondary');
     };
 
-    // 7. Refresh & Export
+    // 6. CSV Export & Refresh
     document.getElementById('btn-refresh').onclick = loadData;
 
     document.getElementById('btn-export').onclick = () => {
@@ -335,7 +416,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       const csv = [headers.join(','), ...displayedRecords.map(r => headers.map(h => '"' + (r[h] ?? '') + '"').join(','))].join('\\n');
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-      a.download = 'mas_issuances_' + currentType + '_' + currentYear + '.csv';
+      a.download = (currentType === 'secondary' ? 'sgs_secondary_market' : 'mas_issuances_' + currentType) + '.csv';
       a.click();
     };
 
@@ -349,11 +430,21 @@ const HTML_CONTENT = `<!DOCTYPE html>
 </body>
 </html>`;
 
-// Node.js Backend Server
+// 4. HTTP Router
 const server = http.createServer(async (req, res) => {
   const parsedUrl = url.parse(req.url, true);
 
-  if (parsedUrl.pathname === '/api/calendar') {
+  if (parsedUrl.pathname === '/api/secondary-market') {
+    // Calls your Cheerio scraper
+    try {
+      const bonds = await scrapeMASSecondaryMarket();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(bonds));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  } else if (parsedUrl.pathname === '/api/calendar') {
     const type = parsedUrl.query.type || 'all';
     const year = parsedUrl.query.year || new Date().getFullYear();
     const startDate = `${year}-01-01`;
@@ -361,14 +452,8 @@ const server = http.createServer(async (req, res) => {
 
     try {
       let results = [];
-
-      // SGS Bonds URL: issue_type:("B" OR "I" OR "G")
       const sgsUrl = `${BASE_MAS_URL}/issuancecalendar?rows=200&filters=issue_type:("B" OR "I" OR "G") AND ann_date:[${startDate} TO ${endDate}]&sort=ann_date asc`;
-
-      // T-Bills URL: issue_type:"T"
       const tbillUrl = `${BASE_MAS_URL}/issuancecalendar?rows=200&filters=issue_type:"T" AND ann_date:[${startDate} TO ${endDate}]&sort=ann_date asc`;
-
-      // Singapore Savings Bonds URL: issue_type:"S"
       const ssbUrl = `${BASE_MAS_URL}/savingbondsissuancecalendar?rows=200&filters=issue_type:"S" AND ann_date:[${startDate} TO ${endDate}]&sort=ann_date asc`;
 
       if (type === 'sgs') {
@@ -381,7 +466,6 @@ const server = http.createServer(async (req, res) => {
         const ssb = await fetchMasApi(ssbUrl);
         results = ssb.map(r => ({ _category: 'SSB', ...r }));
       } else {
-        // Fetch ALL concurrently in parallel
         const [sgs, tbills, ssb] = await Promise.all([
           fetchMasApi(sgsUrl),
           fetchMasApi(tbillUrl),
@@ -394,7 +478,6 @@ const server = http.createServer(async (req, res) => {
           ...ssb.map(r => ({ _category: 'SSB', ...r })),
         ];
 
-        // Sort combined list chronologically by announcement date
         results.sort((a, b) => String(a.ann_date || '').localeCompare(String(b.ann_date || '')));
       }
 
@@ -405,7 +488,7 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ error: err.message }));
     }
   } else {
-    // Serve Frontend
+    // Serve HTML frontend
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(HTML_CONTENT);
   }
