@@ -1,5 +1,4 @@
 const http = require('http');
-const https = require('https');
 const url = require('url');
 const axios = require('axios');
 const cheerio = require('cheerio');
@@ -10,6 +9,7 @@ const SECONDARY_MARKET_URL = 'https://eservices.mas.gov.sg/statistics/fdanet/Bon
 const YIELD_CURVE_URL = 'https://eservices.mas.gov.sg/statistics/fdanet/SgsBenchmarkIssuePrices.aspx';
 
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 // Helper: Parse dates in "YYYY-MM-DD" or "DD MMM YYYY"
 function parseFlexibleDate(str) {
@@ -89,7 +89,7 @@ function getCouponPaymentInfo(secType, matDateObj, interestDate1, interestDate2)
   };
 }
 
-// Helper: Linear Interpolation for Yield Curve based on duration (years)
+// Helper: Linear Interpolation for Yield Curve
 function calculateIndicativeYield(durationYears, curve) {
   if (!curve || durationYears <= 0) return null;
 
@@ -123,12 +123,12 @@ function calculateIndicativeYield(durationYears, curve) {
   return null;
 }
 
-// 1. Scrape SGS Yield Curve from MAS (Strictly Yields < 20%)
+// 1. Scrape SGS Yield Curve from MAS (Timeout-safe)
 async function getSGSYieldCurve() {
   try {
     const { data: html } = await axios.get(YIELD_CURVE_URL, {
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-      timeout: 10000
+      headers: { 'User-Agent': BROWSER_UA },
+      timeout: 8000
     });
 
     const $ = cheerio.load(html);
@@ -158,17 +158,17 @@ async function getSGSYieldCurve() {
 
     return latestCurve;
   } catch (err) {
-    console.error('Error fetching yield curve:', err.message);
+    console.warn('[Yield Curve] Fetch warning:', err.message);
     return null;
   }
 }
 
-// 2. Scrape Secondary Market Bonds
+// 2. Scrape Secondary Market Bonds (Timeout-safe)
 async function scrapeMASSecondaryMarket() {
   try {
     const { data } = await axios.get(SECONDARY_MARKET_URL, {
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-      timeout: 10000
+      headers: { 'User-Agent': BROWSER_UA },
+      timeout: 8000
     });
 
     const $ = cheerio.load(data);
@@ -200,27 +200,28 @@ async function scrapeMASSecondaryMarket() {
 
     return bonds;
   } catch (err) {
-    console.error('Error scraping secondary market:', err.message);
+    console.warn('[Secondary Market] Fetch warning:', err.message);
     return [];
   }
 }
 
-// 3. Fetch Primary MAS API
-function fetchMasApi(targetUrl) {
-  return new Promise((resolve, reject) => {
-    https.get(encodeURI(targetUrl), (res) => {
-      let data = '';
-      res.on('data', chunk => { data += chunk; });
-      res.on('end', () => {
-        try {
-          const json = JSON.parse(data);
-          resolve(json?.result?.records || []);
-        } catch (e) {
-          resolve([]);
-        }
-      });
-    }).on('error', err => reject(err));
-  });
+// 3. Fetch Primary MAS API using Axios with parameter serialization
+async function fetchMasApi(endpoint, filters, sort = 'ann_date asc') {
+  try {
+    const res = await axios.get(`${BASE_MAS_URL}${endpoint}`, {
+      params: {
+        rows: 200,
+        filters: filters,
+        sort: sort
+      },
+      headers: { 'User-Agent': BROWSER_UA },
+      timeout: 8000
+    });
+    return res.data?.result?.records || [];
+  } catch (err) {
+    console.warn(`[MAS API ${endpoint}] Fetch warning:`, err.message);
+    return [];
+  }
 }
 
 // 4. Build Master Table Data
@@ -233,12 +234,13 @@ async function getMasterTableData() {
   const startDate = `${currentYear}-01-01`;
   const endDate = `${nextYear}-12-31`;
 
-  const sgsUrl = `${BASE_MAS_URL}/issuancecalendar?rows=200&filters=issue_type:("B" OR "I" OR "G") AND ann_date:[${startDate} TO ${endDate}]&sort=ann_date asc`;
-  const tbillUrl = `${BASE_MAS_URL}/issuancecalendar?rows=200&filters=issue_type:"T" AND ann_date:[${startDate} TO ${endDate}]&sort=ann_date asc`;
+  const sgsFilters = `issue_type:("B" OR "I" OR "G") AND ann_date:[${startDate} TO ${endDate}]`;
+  const tbillFilters = `issue_type:"T" AND ann_date:[${startDate} TO ${endDate}]`;
 
+  // Fetch in parallel with guaranteed resolution
   const [sgsRecords, tbillRecords, secondaryBonds, yieldCurve] = await Promise.all([
-    fetchMasApi(sgsUrl),
-    fetchMasApi(tbillUrl),
+    fetchMasApi('/issuancecalendar', sgsFilters),
+    fetchMasApi('/issuancecalendar', tbillFilters),
     scrapeMASSecondaryMarket(),
     getSGSYieldCurve()
   ]);
@@ -501,7 +503,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         </p>
       </div>
 
-      <!-- Loading Spinner -->
+      <!-- Loading Spinner / Alert Container -->
       <div id="status-container" class="has-text-centered py-6">
         <span class="icon is-large has-text-info"><i class="fas fa-2x fa-spinner fa-spin"></i></span>
         <p class="mt-3 has-text-grey" id="status-text">Fetching data from MAS...</p>
@@ -525,7 +527,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
           </div>
         </div>
 
-        <!-- Horizontal Scrollable Cashflow Timeline (Hidden by default, shown upon clicking button) -->
+        <!-- Horizontal Scrollable Cashflow Timeline -->
         <div id="ladder-timeline-card" class="box ladder-card mb-4 p-4 is-hidden">
           <div class="level mb-2">
             <div class="level-left">
@@ -537,7 +539,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
               <span class="tag is-dark monospace is-size-7" id="timeline-count-badge">0 Scheduled Payments</span>
             </div>
           </div>
-          <p class="is-size-7 has-text-grey mb-3">Scroll horizontally to view all upcoming coupon payouts and principal maturity returns coming in over your horizon.</p>
+          <p class="is-size-7 has-text-grey mb-3">Scroll horizontally to view upcoming coupon payouts and principal maturity returns coming in over your horizon.</p>
           
           <div style="overflow-x: auto; padding: 15px 5px 10px 5px; -webkit-overflow-scrolling: touch;">
             <div style="position: relative; min-width: max-content; padding-bottom: 5px;">
@@ -618,6 +620,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
   </main>
 
   <script>
+    const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
     let currentType = 'ladder';
     let currentYear = new Date().getFullYear();
     let allRecords = [];
@@ -628,6 +632,30 @@ const HTML_CONTENT = `<!DOCTYPE html>
     let isTimelineVisible = false;
     let sortColumn = null;
     let sortAsc = true;
+
+    function parseFlexibleDate(str) {
+      if (!str || str === '-' || str === 'N/A') return null;
+      const d = new Date(str);
+      if (!isNaN(d.getTime())) return d;
+
+      const parts = str.trim().split(/[\\s\\-]+/);
+      if (parts.length === 3) {
+        const months = { jan:0, feb:1, mar:2, apr:3, may:4, jun:5, jul:6, aug:7, sep:8, oct:9, nov:10, dec:11 };
+        const day = parseInt(parts[0], 10);
+        const mStr = parts[1].slice(0, 3).toLowerCase();
+        const year = parseInt(parts[2], 10);
+        if (!isNaN(day) && months[mStr] !== undefined && !isNaN(year)) {
+          return new Date(year, months[mStr], day);
+        }
+      }
+      return null;
+    }
+
+    function formatDateStr(dateObj) {
+      if (!dateObj || isNaN(dateObj.getTime())) return '-';
+      const day = String(dateObj.getDate()).padStart(2, '0');
+      return day + ' ' + MONTH_NAMES[dateObj.getMonth()] + ' ' + dateObj.getFullYear();
+    }
 
     // 1. Initialize PWA
     (function initPWA() {
@@ -665,6 +693,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
     // 2. Fetch Data from Backend
     async function loadData() {
       showLoading(true);
+      document.getElementById('empty-state').classList.add('is-hidden');
 
       const isLadder = currentType === 'ladder';
       const isMaster = currentType === 'master';
@@ -677,15 +706,15 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
       try {
         if (isCurve) {
-          const res = await axios.get('/api/yield-curve');
+          const res = await axios.get('/api/yield-curve', { timeout: 10000 });
           yieldCurveData = res.data;
           renderYieldCurveView();
         } else if (isLadder || isMaster) {
           if (!masterDataCache) {
-            const res = await axios.get('/api/master');
+            const res = await axios.get('/api/master', { timeout: 12000 });
             masterDataCache = res.data;
           }
-          allRecords = masterDataCache.records || [];
+          allRecords = masterDataCache?.records || [];
           displayedRecords = [...allRecords];
 
           document.getElementById('curve-wrapper').classList.add('is-hidden');
@@ -706,7 +735,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
             ? '/api/secondary-market'
             : '/api/calendar?type=' + currentType + '&year=' + currentYear;
 
-          const res = await axios.get(endpoint);
+          const res = await axios.get(endpoint, { timeout: 10000 });
           allRecords = res.data || [];
           displayedRecords = [...allRecords];
 
@@ -718,12 +747,15 @@ const HTML_CONTENT = `<!DOCTYPE html>
           renderStandardHeaders(isSecondary);
           renderStandardBody(isSecondary);
         }
-
-        showLoading(false);
       } catch (err) {
+        console.error('loadData error:', err);
+        const sc = document.getElementById('status-container');
+        sc.innerHTML = '<div class="notification is-danger is-light p-3">' +
+          '<i class="fa-solid fa-triangle-exclamation mr-2"></i>' + (err.message || 'Error fetching data') + 
+          '<button class="button is-small is-danger is-outlined ml-3" onclick="loadData()">Retry</button></div>';
+        sc.classList.remove('is-hidden');
+      } finally {
         showLoading(false);
-        document.getElementById('status-container').innerHTML = '<div class="notification is-danger is-light">' + err.message + '</div>';
-        document.getElementById('status-container').classList.remove('is-hidden');
       }
     }
 
@@ -807,7 +839,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
         const matDate = parseFlexibleDate(b.maturityDate);
 
         if (b.isTbill) {
-          // T-Bill Maturity Payment (Total Principal + Discount Return)
           const totalPayout = C + (C * (y / 100) * (b.durationYears || 0.5));
           if (matDate && matDate > today) {
             cashflows.push({
@@ -823,10 +854,9 @@ const HTML_CONTENT = `<!DOCTYPE html>
             });
           }
         } else {
-          // SGS Bond: Semi-annual coupon payments + Full Principal Redemption at Maturity
           let d1 = 1, m1 = 1, d2 = 1, m2 = 7;
           if (b.couponSchedule && b.couponSchedule.includes('&')) {
-            const match = b.couponSchedule.match(/\((\d{1,2})\s+([A-Za-z]{3})\s+&\s+(\d{1,2})\s+([A-Za-z]{3})\)/);
+            const match = b.couponSchedule.match(/\\((\\d{1,2})\\s+([A-Za-z]{3})\\s+&\\s+(\\d{1,2})\\s+([A-Za-z]{3})\\)/);
             if (match) {
               d1 = parseInt(match[1], 10);
               m1 = MONTH_NAMES.indexOf(match[2]);
@@ -844,7 +874,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
           const startYear = today.getFullYear();
           const endYear = matDate ? matDate.getFullYear() : startYear + 5;
 
-          // Add Semi-Annual Coupon Inflows
           for (let yr = startYear; yr <= endYear; yr++) {
             [ { d: d1, m: m1 }, { d: d2, m: m2 } ].forEach(item => {
               if (item.m >= 0) {
@@ -866,7 +895,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
             });
           }
 
-          // Add Maturity Inflow (Principal Return + Final Coupon)
           if (matDate && matDate > today) {
             cashflows.push({
               dateObj: matDate,
@@ -883,7 +911,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
         }
       });
 
-      // Sort chronologically by date
       cashflows.sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime());
       return cashflows;
     }
@@ -925,7 +952,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
             '<i class="fa-solid fa-arrow-down"></i>' +
           '</div>' +
           '<div style="width: 12px; height: 12px; border-radius: 50%; background: ' + dotColor + '; border: 2px solid #0d1117; z-index: 2;"></div>' +
-          '<div class="is-size-7 has-text-grey mt-1 monospace">' + MONTH_NAMES[cf.dateObj.getMonth()] + ' \'' + String(cf.dateObj.getFullYear()).slice(-2) + '</div>';
+          '<div class="is-size-7 has-text-grey mt-1 monospace">' + MONTH_NAMES[cf.dateObj.getMonth()] + ' \\'' + String(cf.dateObj.getFullYear()).slice(-2) + '</div>';
 
         container.appendChild(node);
       });
@@ -1431,13 +1458,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
     };
 
     function showLoading(show) {
-      document.getElementById('status-container').classList.toggle('is-hidden', !show);
-      if (show) {
-        document.getElementById('table-wrapper').classList.add('is-hidden');
-        document.getElementById('ladder-view').classList.add('is-hidden');
-        document.getElementById('curve-wrapper').classList.add('is-hidden');
-        document.getElementById('empty-state').classList.add('is-hidden');
-      }
+      const spinner = document.getElementById('status-container');
+      if (spinner) spinner.classList.toggle('is-hidden', !show);
     }
 
     loadData();
@@ -1474,30 +1496,30 @@ const server = http.createServer(async (req, res) => {
 
     try {
       let results = [];
-      const sgsUrl = `${BASE_MAS_URL}/issuancecalendar?rows=200&filters=issue_type:("B" OR "I" OR "G") AND ann_date:[${startDate} TO ${endDate}]&sort=ann_date asc`;
-      const tbillUrl = `${BASE_MAS_URL}/issuancecalendar?rows=200&filters=issue_type:"T" AND ann_date:[${startDate} TO ${endDate}]&sort=ann_date asc`;
-      const ssbUrl = `${BASE_MAS_URL}/savingbondsissuancecalendar?rows=200&filters=issue_type:"S" AND ann_date:[${startDate} TO ${endDate}]&sort=ann_date asc`;
+      const sgsFilters = `issue_type:("B" OR "I" OR "G") AND ann_date:[${startDate} TO ${endDate}]`;
+      const tbillFilters = `issue_type:"T" AND ann_date:[${startDate} TO ${endDate}]`;
+      const ssbFilters = `issue_type:"S" AND ann_date:[${startDate} TO ${endDate}]`;
 
       if (type === 'sgs') {
-        const sgs = await fetchMasApi(sgsUrl);
+        const sgs = await fetchMasApi('/issuancecalendar', sgsFilters);
         results = sgs.map(r => ({ _category: 'SGS Bond', ...r }));
       } else if (type === 'tbill') {
-        const tbills = await fetchMasApi(tbillUrl);
+        const tbills = await fetchMasApi('/issuancecalendar', tbillFilters);
         results = tbills.map(r => ({ _category: 'T-Bill', ...r }));
       } else if (type === 'ssb') {
-        const ssb = await fetchMasApi(ssbUrl);
+        const ssb = await fetchMasApi('/savingbondsissuancecalendar', ssbFilters);
         results = ssb.map(r => ({ _category: 'SSB', ...r }));
       } else {
         const [sgs, tbills, ssb] = await Promise.all([
-          fetchMasApi(sgsUrl),
-          fetchMasApi(tbillUrl),
-          fetchMasApi(ssbUrl),
+          fetchMasApi('/issuancecalendar', sgsFilters),
+          fetchMasApi('/issuancecalendar', tbillFilters),
+          fetchMasApi('/savingbondsissuancecalendar', ssbFilters)
         ]);
 
         results = [
           ...sgs.map(r => ({ _category: 'SGS Bond', ...r })),
           ...tbills.map(r => ({ _category: 'T-Bill', ...r })),
-          ...ssb.map(r => ({ _category: 'SSB', ...r })),
+          ...ssb.map(r => ({ _category: 'SSB', ...r }))
         ];
 
         results.sort((a, b) => String(a.ann_date || '').localeCompare(String(b.ann_date || '')));
