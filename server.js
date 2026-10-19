@@ -200,7 +200,7 @@ async function scrapeMASSecondaryMarket() {
 
     return bonds;
   } catch (err) {
-    console.error('Error scraping secondary market:', err.message);
+    console.error('[Secondary Market] Fetch warning:', err.message);
     return [];
   }
 }
@@ -327,7 +327,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#12161a">
-  <title>LadderMaker - Inflation-Adjusted Singapore Bond Ladder</title>
+  <title>LadderMaker - Singapore Government Bond Ladder & Cashflows</title>
   
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.2/css/bulma.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -447,13 +447,17 @@ const HTML_CONTENT = `<!DOCTYPE html>
       <!-- Bond Ladder Configuration Controls -->
       <div id="ladder-controls-panel" class="box ladder-card mb-4 p-4">
         <div class="columns is-multiline is-vcentered">
-          <!-- Start Payment Date -->
-          <div class="column is-3">
-            <label class="label is-small has-text-warning"><i class="fa-solid fa-calendar-star mr-1"></i> First Payment Date (Maturity #1)</label>
-            <div class="control has-icons-left">
-              <input class="input is-small is-dark monospace" type="date" id="ladder-start-date">
-              <span class="icon is-small is-left has-text-grey"><i class="fa-regular fa-calendar"></i></span>
+          <!-- Dropdown: First Rung Selection (Only bonds/T-bills maturing next year) -->
+          <div class="column is-4">
+            <label class="label is-small has-text-warning"><i class="fa-solid fa-calendar-star mr-1"></i> First Rung (Next Year Maturity)</label>
+            <div class="control">
+              <div class="select is-small is-fullwidth is-dark">
+                <select id="ladder-start-bond">
+                  <option value="">Loading next-year maturities...</option>
+                </select>
+              </div>
             </div>
+            <p class="help has-text-grey-light" style="font-size: 0.7rem;">Select a bond/T-bill maturing next year to form Rung 1</p>
           </div>
 
           <!-- Annual Inflation Rate -->
@@ -496,7 +500,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
           </div>
 
           <!-- Total Capital -->
-          <div class="column is-3">
+          <div class="column is-2">
             <label class="label is-small has-text-grey">Total Capital (SGD)</label>
             <div class="control has-icons-left">
               <input class="input is-small is-dark monospace" type="number" id="ladder-capital" value="100000" step="5000" min="1000">
@@ -668,7 +672,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       return day + ' ' + MONTH_NAMES[dateObj.getMonth()] + ' ' + dateObj.getFullYear();
     }
 
-    // 1. Initialize PWA & Default Start Payment Date
+    // 1. Initialize PWA
     (function initPWA() {
       const manifest = {
         name: "LadderMaker - Singapore Bond Ladder",
@@ -691,14 +695,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
         navigator.serviceWorker.register(URL.createObjectURL(new Blob([sw], { type: 'application/javascript' }))).catch(() => {});
       }
 
-      // Default First Payment Date to 1 Year from Today
-      const defaultFirstDate = new Date();
-      defaultFirstDate.setFullYear(defaultFirstDate.getFullYear() + 1);
-      const yyyy = defaultFirstDate.getFullYear();
-      const mm = String(defaultFirstDate.getMonth() + 1).padStart(2, '0');
-      const dd = String(defaultFirstDate.getDate()).padStart(2, '0');
-      document.getElementById('ladder-start-date').value = yyyy + '-' + mm + '-' + dd;
-
       const yearSelect = document.getElementById('year-select');
       for (let y = currentYear + 1; y >= currentYear - 2; y--) {
         const opt = document.createElement('option');
@@ -709,7 +705,51 @@ const HTML_CONTENT = `<!DOCTYPE html>
       }
     })();
 
-    // 2. Fetch Data from Backend
+    // 2. Populate Dropdown with Only Bonds/T-Bills Maturing Next Year
+    function populateNextYearDropdown() {
+      const select = document.getElementById('ladder-start-bond');
+      const previousValue = select.value;
+      select.innerHTML = '';
+
+      const nextYear = new Date().getFullYear() + 1;
+
+      // Filter for securities maturing next year
+      const nextYearBonds = allRecords.filter(b => {
+        const mat = parseFlexibleDate(b.maturityDate);
+        return mat && mat.getFullYear() === nextYear;
+      });
+
+      // Sort chronologically by maturity date
+      nextYearBonds.sort((a, b) => {
+        const matA = parseFlexibleDate(a.maturityDate);
+        const matB = parseFlexibleDate(b.maturityDate);
+        return (matA?.getTime() || 0) - (matB?.getTime() || 0);
+      });
+
+      if (!nextYearBonds.length) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'No issues maturing in ' + nextYear;
+        select.appendChild(opt);
+        return;
+      }
+
+      nextYearBonds.forEach((b, idx) => {
+        const mat = parseFlexibleDate(b.maturityDate);
+        const opt = document.createElement('option');
+        opt.value = b.issueCode;
+        const yieldStr = b.indicativeYield !== null ? b.indicativeYield.toFixed(2) + '%' : '-';
+        opt.textContent = formatDateStr(mat) + ' — ' + b.issueCode + ' (' + b.secType + ', ' + yieldStr + ')';
+
+        // Select previously chosen issue or first by default
+        if (previousValue ? b.issueCode === previousValue : idx === 0) {
+          opt.selected = true;
+        }
+        select.appendChild(opt);
+      });
+    }
+
+    // 3. Fetch Data from Backend
     async function loadData() {
       showLoading(true);
       document.getElementById('empty-state').classList.add('is-hidden');
@@ -741,6 +781,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
           if (isLadder) {
             document.getElementById('table-wrapper').classList.add('is-hidden');
             document.getElementById('ladder-view').classList.remove('is-hidden');
+            populateNextYearDropdown();
             buildBondLadder();
           } else {
             document.getElementById('ladder-view').classList.add('is-hidden');
@@ -778,7 +819,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       }
     }
 
-    // 3. Inflation-Adjusted Dynamic Allocation Bond Ladder Engine
+    // 4. Bond Ladder Engine (Pinning Rung 1 to User's Selected Next-Year Bond)
     function buildBondLadder() {
       const stepYears = parseFloat(document.getElementById('ladder-freq').value) || 1.0;
       const horizonYears = parseFloat(document.getElementById('ladder-horizon').value) || 5.0;
@@ -786,12 +827,16 @@ const HTML_CONTENT = `<!DOCTYPE html>
       const inflationRatePct = parseFloat(document.getElementById('ladder-inflation').value) || 0;
       const inflationRate = inflationRatePct / 100;
 
-      const startDateInput = document.getElementById('ladder-start-date').value;
-      let firstPaymentDate = new Date(startDateInput);
-      if (isNaN(firstPaymentDate.getTime())) {
-        firstPaymentDate = new Date();
-        firstPaymentDate.setFullYear(firstPaymentDate.getFullYear() + 1);
+      // Identify selected starting bond from dropdown
+      const selectedRung1Code = document.getElementById('ladder-start-bond').value;
+      const rung1Bond = allRecords.find(b => b.issueCode === selectedRung1Code);
+
+      if (!rung1Bond) {
+        document.getElementById('ladder-table-body').innerHTML = '<tr><td colspan="10" class="has-text-centered has-text-grey">Please select a starting bond from the dropdown.</td></tr>';
+        return;
       }
+
+      const firstPaymentDate = parseFlexibleDate(rung1Bond.maturityDate);
       firstPaymentDate.setHours(0, 0, 0, 0);
 
       const today = new Date();
@@ -802,10 +847,24 @@ const HTML_CONTENT = `<!DOCTYPE html>
       const usedIssueCodes = new Set();
       ladderSchedule = [];
 
-      let lastMaturityTimestamp = 0;
+      // Lock in Rung 1 with the user's selected issue
+      usedIssueCodes.add(rung1Bond.issueCode);
+      ladderSchedule.push({
+        rungIndex: 1,
+        targetDateObj: firstPaymentDate,
+        targetDateStr: formatDateStr(firstPaymentDate),
+        selectedBond: rung1Bond,
+        coverageYears: stepYears,
+        allocatedCapital: 0,
+        lumpSumPayout: 0,
+        inflationFactor: 1.0,
+        periodCashflowRate: 0
+      });
 
-      // Pass 1: Select matching securities adhering to strict tenor & chronological constraints
-      for (let i = 1; i <= numRungs; i++) {
+      let lastMaturityTimestamp = firstPaymentDate.getTime();
+
+      // Build subsequent rungs (i = 2 to numRungs)
+      for (let i = 2; i <= numRungs; i++) {
         const targetDateObj = new Date(firstPaymentDate.getTime());
         const monthsToAdd = Math.round((i - 1) * stepYears * 12);
         targetDateObj.setMonth(targetDateObj.getMonth() + monthsToAdd);
@@ -819,22 +878,22 @@ const HTML_CONTENT = `<!DOCTYPE html>
           const mat = parseFlexibleDate(b.maturityDate);
           if (!mat) return false;
 
-          // RULE 1: T-Bills can NEVER be placed in rungs > 1.2 years away!
+          // Rule 1: T-Bills can never be placed into multi-year rungs (> 1.2 years away)
           if (b.isTbill && durationFromTodayYears > 1.2) {
             return false;
           }
 
-          // RULE 2: Chronological progression - maturity cannot precede previous rung
+          // Rule 2: Chronological progression - maturity cannot precede previous rung
           if (lastMaturityTimestamp > 0 && mat.getTime() < (lastMaturityTimestamp - 45 * 86400000)) {
             return false;
           }
 
-          // RULE 3: Must fall within the target date window
+          // Rule 3: Must fall within target window
           const diffDays = Math.abs((mat - targetDateObj) / 86400000);
           return diffDays <= windowDays;
         });
 
-        // Multi-year fallback for SGS bonds only (never T-bills) within 1-year buffer
+        // Multi-year fallback for SGS bonds only within a realistic 1-year buffer
         if (!candidates.length && durationFromTodayYears > 1.2) {
           const maxAllowedDiffDays = Math.min(365, stepYears * 365.25 * 0.9);
           candidates = availableBonds.filter(b => {
@@ -870,11 +929,9 @@ const HTML_CONTENT = `<!DOCTYPE html>
         });
       }
 
-      // Pass 2: Calculate Exact Wait Gaps between consecutive maturities
+      // Calculate exact coverage wait gaps between consecutive maturities
       const filledRungs = ladderSchedule.filter(r => r.selectedBond !== null);
-      const firstMaturityDate = filledRungs.length > 0 
-        ? parseFlexibleDate(filledRungs[0].selectedBond.maturityDate) 
-        : firstPaymentDate;
+      const firstMat = parseFlexibleDate(filledRungs[0].selectedBond.maturityDate);
 
       for (let k = 0; k < filledRungs.length; k++) {
         const curRung = filledRungs[k];
@@ -888,14 +945,11 @@ const HTML_CONTENT = `<!DOCTYPE html>
           curRung.coverageYears = stepYears;
         }
 
-        // Time elapsed from Rung 1 in years
-        const elapsedYears = Math.max(0, (curMat.getTime() - firstMaturityDate.getTime()) / (365.25 * 86400000));
-        // Inflation multiplier for this period: (1 + g)^t
+        const elapsedYears = Math.max(0, (curMat.getTime() - firstMat.getTime()) / (365.25 * 86400000));
         curRung.inflationFactor = Math.pow(1 + inflationRate, elapsedYears);
       }
 
-      // Pass 3: Proportional Allocation incorporating both Gap Duration AND Compound Inflation
-      // Weight = (coverageYears * inflationFactor) / payoutFactor
+      // Inflation-adjusted gap-weighted capital distribution
       let totalWeight = 0;
       filledRungs.forEach(r => {
         const b = r.selectedBond;
@@ -909,13 +963,11 @@ const HTML_CONTENT = `<!DOCTYPE html>
         totalWeight += r.weight;
       });
 
-      // Base Year 1 Cashflow Rate (R0)
       const baseYear1Rate = totalWeight > 0 ? (totalCapital / totalWeight) : 0;
 
       filledRungs.forEach(r => {
         r.allocatedCapital = totalWeight > 0 ? (totalCapital * (r.weight / totalWeight)) : 0;
         r.lumpSumPayout = r.allocatedCapital * r.payoutFactor;
-        // Annualized inflation-adjusted rate for this specific rung: R0 * (1 + g)^t
         r.periodCashflowRate = baseYear1Rate * r.inflationFactor;
       });
 
@@ -924,7 +976,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       renderLadderTable(totalCapital, baseYear1Rate, filledRungs);
     }
 
-    // 4. Generate & Render Scrollable Cashflow Timeline
+    // 5. Generate & Render Scrollable Cashflow Timeline
     function generateLadderCashflows(schedule) {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -1137,13 +1189,14 @@ const HTML_CONTENT = `<!DOCTYPE html>
       document.getElementById('stat-val-4').innerHTML = '<span class="has-text-warning">+$' + Math.round(lastRungRate).toLocaleString() + '/yr</span>';
     }
 
-    document.getElementById('ladder-start-date').onchange = buildBondLadder;
+    // Event Listeners
+    document.getElementById('ladder-start-bond').onchange = buildBondLadder;
     document.getElementById('ladder-inflation').oninput = buildBondLadder;
     document.getElementById('ladder-freq').onchange = buildBondLadder;
     document.getElementById('ladder-horizon').onchange = buildBondLadder;
     document.getElementById('ladder-capital').oninput = buildBondLadder;
 
-    // 5. Master Table View Handlers
+    // 6. Master Table View Handlers
     function updateMasterMetrics() {
       document.getElementById('stat-label-1').textContent = 'Total Valid Issues';
       document.getElementById('stat-val-1').textContent = allRecords.length;
@@ -1223,7 +1276,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       });
     }
 
-    // 6. Yield Curve View Handlers
+    // 7. Yield Curve View Handlers
     function renderYieldCurveView() {
       document.getElementById('ladder-view').classList.add('is-hidden');
       document.getElementById('table-wrapper').classList.add('is-hidden');
@@ -1387,7 +1440,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       });
     }
 
-    // 7. Standard Tab Handlers (All, Primary, Secondary)
+    // 8. Standard Tab Handlers (All, Primary, Secondary)
     function updateStandardMetrics(isSecondary) {
       document.getElementById('stat-label-1').textContent = 'Securities Listed';
       document.getElementById('stat-val-1').textContent = allRecords.length;
@@ -1477,7 +1530,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       });
     }
 
-    // 8. Navigation Tabs
+    // 9. Navigation Tabs
     document.querySelectorAll('#category-tabs li').forEach(tab => {
       tab.onclick = () => {
         document.querySelectorAll('#category-tabs li').forEach(t => t.classList.remove('is-active'));
@@ -1502,7 +1555,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       }
     };
 
-    // 9. Refresh & CSV Export
+    // 10. Refresh & CSV Export
     document.getElementById('btn-refresh').onclick = () => {
       masterDataCache = null;
       loadData();
