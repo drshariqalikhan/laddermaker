@@ -200,7 +200,7 @@ async function scrapeMASSecondaryMarket() {
 
     return bonds;
   } catch (err) {
-    console.warn('[Secondary Market] Fetch warning:', err.message);
+    console.error('Error scraping secondary market:', err.message);
     return [];
   }
 }
@@ -327,7 +327,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#12161a">
-  <title>LadderMaker - Singapore Government Bond Ladder & Cashflows</title>
+  <title>LadderMaker - Inflation-Adjusted Singapore Bond Ladder</title>
   
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.2/css/bulma.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -378,7 +378,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         <div class="level-left">
           <div>
             <h1 class="title is-4 has-text-light" id="page-title">Singapore Government Securities</h1>
-            <p class="subtitle is-6 has-text-grey" id="page-subtitle">Build customized steady cashflow spending ladders, track timelines, and optimize yields</p>
+            <p class="subtitle is-6 has-text-grey" id="page-subtitle">Build customized inflation-adjusted spending ladders, track cashflows, and optimize yields</p>
           </div>
         </div>
         <div class="level-right">
@@ -405,13 +405,13 @@ const HTML_CONTENT = `<!DOCTYPE html>
         </div>
         <div class="column is-3">
           <div class="box summary-card py-3">
-            <p class="heading has-text-grey" id="stat-label-3">Steady Cashflow Rate</p>
+            <p class="heading has-text-grey" id="stat-label-3">Year 1 Cashflow Rate</p>
             <p class="title is-4 has-text-info" id="stat-val-3">$0</p>
           </div>
         </div>
         <div class="column is-3">
           <div class="box summary-card py-3">
-            <p class="heading has-text-grey" id="stat-label-4">Active Ladder Coverage</p>
+            <p class="heading has-text-grey" id="stat-label-4">Inflation Adjusted Final Rate</p>
             <p class="title is-4 has-text-warning monospace" id="stat-val-4">-</p>
           </div>
         </div>
@@ -454,7 +454,15 @@ const HTML_CONTENT = `<!DOCTYPE html>
               <input class="input is-small is-dark monospace" type="date" id="ladder-start-date">
               <span class="icon is-small is-left has-text-grey"><i class="fa-regular fa-calendar"></i></span>
             </div>
-            <p class="help has-text-grey-light" style="font-size: 0.7rem;">Target date for your 1st income lump sum</p>
+          </div>
+
+          <!-- Annual Inflation Rate -->
+          <div class="column is-2">
+            <label class="label is-small has-text-danger"><i class="fa-solid fa-arrow-trend-up mr-1"></i> Annual Inflation (%)</label>
+            <div class="control has-icons-left">
+              <input class="input is-small is-dark monospace" type="number" id="ladder-inflation" value="2.5" step="0.25" min="0" max="15">
+              <span class="icon is-small is-left has-text-grey">%</span>
+            </div>
           </div>
 
           <!-- Frequency -->
@@ -473,7 +481,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
           <!-- Horizon -->
           <div class="column is-2">
-            <label class="label is-small has-text-grey">Income Horizon (Years)</label>
+            <label class="label is-small has-text-grey">Income Horizon</label>
             <div class="control">
               <div class="select is-small is-fullwidth is-dark">
                 <select id="ladder-horizon">
@@ -488,24 +496,11 @@ const HTML_CONTENT = `<!DOCTYPE html>
           </div>
 
           <!-- Total Capital -->
-          <div class="column is-2">
+          <div class="column is-3">
             <label class="label is-small has-text-grey">Total Capital (SGD)</label>
             <div class="control has-icons-left">
               <input class="input is-small is-dark monospace" type="number" id="ladder-capital" value="100000" step="5000" min="1000">
               <span class="icon is-small is-left has-text-grey">$</span>
-            </div>
-          </div>
-
-          <!-- Strategy -->
-          <div class="column is-3">
-            <label class="label is-small has-text-grey">Optimization Mode</label>
-            <div class="control">
-              <div class="select is-small is-fullwidth is-dark">
-                <select id="ladder-strategy">
-                  <option value="max-yield" selected>Max Yield (Highest Ladder Return)</option>
-                  <option value="closest">Closest to Exact Target Date</option>
-                </select>
-              </div>
             </div>
           </div>
         </div>
@@ -532,7 +527,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         <div class="level mb-3">
           <div class="level-left">
             <h3 class="subtitle is-6 has-text-weight-bold has-text-light mb-0">
-              <i class="fa-solid fa-layer-group mr-2 has-text-success"></i> Steady Cashflow Spending Ladder
+              <i class="fa-solid fa-layer-group mr-2 has-text-success"></i> Inflation-Adjusted Spending Schedule
             </h3>
           </div>
           <div class="level-right">
@@ -548,7 +543,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
           <div class="level mb-2">
             <div class="level-left">
               <h3 class="subtitle is-6 has-text-weight-bold has-text-info mb-0">
-                <i class="fa-solid fa-timeline mr-2"></i> Cash Flow Timeline (Coupons & Gap-Adjusted Payouts)
+                <i class="fa-solid fa-timeline mr-2"></i> Cash Flow Timeline (Coupons & Inflation-Adjusted Lump Sums)
               </h3>
             </div>
             <div class="level-right">
@@ -565,7 +560,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
           </div>
         </div>
 
-        <!-- Ladder Rung Table with Dynamic Gap Allocations -->
+        <!-- Ladder Rung Table with Inflation-Adjusted Dynamic Allocation -->
         <div class="table-container mb-4">
           <table class="table is-fullwidth is-hoverable is-narrow">
             <thead>
@@ -574,11 +569,12 @@ const HTML_CONTENT = `<!DOCTYPE html>
                 <th>TARGET PAYOUT</th>
                 <th>SELECTED SECURITY</th>
                 <th>ACTUAL MATURITY</th>
-                <th>COVERAGE WINDOW</th>
+                <th>COVERAGE GAP</th>
+                <th>INFLATION FACTOR</th>
                 <th>DYNAMIC ALLOCATION</th>
                 <th>INDICATIVE YIELD</th>
                 <th>LUMP SUM PAYOUT</th>
-                <th>STEADY CASHFLOW RATE</th>
+                <th>INFLATION-ADJUSTED CASHFLOW</th>
               </tr>
             </thead>
             <tbody id="ladder-table-body"></tbody>
@@ -695,7 +691,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         navigator.serviceWorker.register(URL.createObjectURL(new Blob([sw], { type: 'application/javascript' }))).catch(() => {});
       }
 
-      // Default First Payment Date: 1 Year from Today
+      // Default First Payment Date to 1 Year from Today
       const defaultFirstDate = new Date();
       defaultFirstDate.setFullYear(defaultFirstDate.getFullYear() + 1);
       const yyyy = defaultFirstDate.getFullYear();
@@ -782,12 +778,13 @@ const HTML_CONTENT = `<!DOCTYPE html>
       }
     }
 
-    // 3. Dynamic Gap-Weighted Bond Ladder Engine
+    // 3. Inflation-Adjusted Dynamic Allocation Bond Ladder Engine
     function buildBondLadder() {
       const stepYears = parseFloat(document.getElementById('ladder-freq').value) || 1.0;
       const horizonYears = parseFloat(document.getElementById('ladder-horizon').value) || 5.0;
       const totalCapital = parseFloat(document.getElementById('ladder-capital').value) || 100000;
-      const strategy = document.getElementById('ladder-strategy').value;
+      const inflationRatePct = parseFloat(document.getElementById('ladder-inflation').value) || 0;
+      const inflationRate = inflationRatePct / 100;
 
       const startDateInput = document.getElementById('ladder-start-date').value;
       let firstPaymentDate = new Date(startDateInput);
@@ -852,17 +849,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
         let selected = null;
         if (candidates.length > 0) {
-          if (strategy === 'max-yield') {
-            candidates.sort((a, b) => (b.indicativeYield || 0) - (a.indicativeYield || 0));
-            selected = candidates[0];
-          } else {
-            candidates.sort((a, b) => {
-              const diffA = Math.abs((parseFlexibleDate(a.maturityDate) - targetDateObj) / 86400000);
-              const diffB = Math.abs((parseFlexibleDate(b.maturityDate) - targetDateObj) / 86400000);
-              return diffA - diffB;
-            });
-            selected = candidates[0];
-          }
+          candidates.sort((a, b) => (b.indicativeYield || 0) - (a.indicativeYield || 0));
+          selected = candidates[0];
 
           usedIssueCodes.add(selected.issueCode);
           const selMat = parseFlexibleDate(selected.maturityDate);
@@ -876,63 +864,64 @@ const HTML_CONTENT = `<!DOCTYPE html>
           selectedBond: selected,
           coverageYears: stepYears,
           allocatedCapital: 0,
-          lumpSumPayout: 0
+          lumpSumPayout: 0,
+          inflationFactor: 1.0,
+          periodCashflowRate: 0
         });
       }
 
-      // Pass 2: Calculate Exact Wait Gaps between consecutive maturities (Coverage Duration)
+      // Pass 2: Calculate Exact Wait Gaps between consecutive maturities
       const filledRungs = ladderSchedule.filter(r => r.selectedBond !== null);
+      const firstMaturityDate = filledRungs.length > 0 
+        ? parseFlexibleDate(filledRungs[0].selectedBond.maturityDate) 
+        : firstPaymentDate;
 
       for (let k = 0; k < filledRungs.length; k++) {
         const curRung = filledRungs[k];
         const curMat = parseFlexibleDate(curRung.selectedBond.maturityDate);
 
         if (k < filledRungs.length - 1) {
-          // Gap to next maturity: Payout from current rung funds the user until next maturity
           const nextMat = parseFlexibleDate(filledRungs[k + 1].selectedBond.maturityDate);
           const gapDays = Math.max(30, (nextMat.getTime() - curMat.getTime()) / 86400000);
           curRung.coverageYears = gapDays / 365.25;
         } else {
-          // Final rung covers nominal step
           curRung.coverageYears = stepYears;
         }
+
+        // Time elapsed from Rung 1 in years
+        const elapsedYears = Math.max(0, (curMat.getTime() - firstMaturityDate.getTime()) / (365.25 * 86400000));
+        // Inflation multiplier for this period: (1 + g)^t
+        curRung.inflationFactor = Math.pow(1 + inflationRate, elapsedYears);
       }
 
-      // Pass 3: Proportional Steady-Cashflow Allocation
-      // Weight = coverageYears / maturityPayoutFactor
+      // Pass 3: Proportional Allocation incorporating both Gap Duration AND Compound Inflation
+      // Weight = (coverageYears * inflationFactor) / payoutFactor
       let totalWeight = 0;
       filledRungs.forEach(r => {
         const b = r.selectedBond;
         const y = b.indicativeYield || 0;
-        // Payout multiplier at maturity (Principal + Return)
         const payoutFactor = b.isTbill 
           ? (1 + (y / 100) * (b.durationYears || 0.5)) 
           : (1 + (y / 100) / 2);
         
         r.payoutFactor = payoutFactor;
-        r.weight = r.coverageYears / payoutFactor;
+        r.weight = (r.coverageYears * r.inflationFactor) / payoutFactor;
         totalWeight += r.weight;
       });
 
-      // Distribute total capital so cashflow burn rate ($/year) is constant across all gaps
-      let steadyCashflowRate = totalWeight > 0 ? (totalCapital / totalWeight) : 0;
+      // Base Year 1 Cashflow Rate (R0)
+      const baseYear1Rate = totalWeight > 0 ? (totalCapital / totalWeight) : 0;
 
       filledRungs.forEach(r => {
         r.allocatedCapital = totalWeight > 0 ? (totalCapital * (r.weight / totalWeight)) : 0;
         r.lumpSumPayout = r.allocatedCapital * r.payoutFactor;
+        // Annualized inflation-adjusted rate for this specific rung: R0 * (1 + g)^t
+        r.periodCashflowRate = baseYear1Rate * r.inflationFactor;
       });
 
       const cashflows = generateLadderCashflows(ladderSchedule);
       renderLadderTimeline(cashflows);
-      renderLadderTable(totalCapital, steadyCashflowRate);
-    }
-
-    function formatTargetPeriod(years) {
-      if (years < 1) {
-        const months = Math.round(years * 12);
-        return months + ' Months';
-      }
-      return years.toFixed(years % 1 === 0 ? 0 : 1) + ' Year' + (years > 1 ? 's' : '');
+      renderLadderTable(totalCapital, baseYear1Rate, filledRungs);
     }
 
     // 4. Generate & Render Scrollable Cashflow Timeline
@@ -1077,7 +1066,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       btn.classList.toggle('is-success', isTimelineVisible);
     };
 
-    function renderLadderTable(totalCapital, steadyCashflowRate) {
+    function renderLadderTable(totalCapital, baseYear1Rate, filledRungs) {
       const tbody = document.getElementById('ladder-table-body');
       tbody.innerHTML = '';
 
@@ -1089,7 +1078,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
       let weightedYieldSum = 0;
       let filledCapital = 0;
-      let totalYearsCovered = 0;
 
       ladderSchedule.forEach(rung => {
         const b = rung.selectedBond;
@@ -1101,6 +1089,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
             '<td><span class="tag is-warning is-light monospace has-text-weight-bold"><i class="fa-regular fa-calendar-check mr-1"></i> ' + rung.targetDateStr + '</span></td>' +
             '<td colspan="2"><span class="tag is-dark has-text-warning"><i class="fa-solid fa-triangle-exclamation mr-1"></i> No SGS issue maturing in this window</span></td>' +
             '<td><span class="has-text-grey">Market gap</span></td>' +
+            '<td><span class="has-text-grey">-</span></td>' +
             '<td class="monospace has-text-grey">$0</td>' +
             '<td><span class="has-text-grey">-</span></td>' +
             '<td><span class="has-text-grey">-</span></td>' +
@@ -1112,26 +1101,28 @@ const HTML_CONTENT = `<!DOCTYPE html>
         const yieldVal = b.indicativeYield || 0;
         weightedYieldSum += yieldVal * rung.allocatedCapital;
         filledCapital += rung.allocatedCapital;
-        totalYearsCovered += rung.coverageYears;
 
         const monthsCovered = Math.round(rung.coverageYears * 12);
         const tagClass = b.secType === 'Primary SGS' ? 'is-primary' : (b.secType === 'Primary T-Bill' ? 'is-info' : 'is-warning');
+        const inflationDisplay = rung.inflationFactor.toFixed(3) + 'x';
+        const inflationDelta = '+' + ((rung.inflationFactor - 1) * 100).toFixed(1) + '%';
 
         tr.innerHTML = '<td><span class="rung-step has-text-white is-size-7" style="' + badgeColor + '">' + rung.rungIndex + '</span></td>' +
           '<td><span class="tag is-warning is-light monospace has-text-weight-bold"><i class="fa-regular fa-calendar-check mr-1"></i> ' + rung.targetDateStr + '</span></td>' +
           '<td><span class="monospace has-text-weight-bold has-text-light">' + b.issueCode + '</span> <span class="tag is-small ml-2 ' + tagClass + '">' + b.secType + '</span></td>' +
           '<td class="has-text-weight-medium">' + b.maturityDate + '</td>' +
-          '<td><span class="tag is-dark has-text-info monospace has-text-weight-bold">' + monthsCovered + ' Months (' + rung.coverageYears.toFixed(1) + 'Y)</span></td>' +
+          '<td><span class="tag is-dark has-text-info monospace has-text-weight-bold">' + monthsCovered + ' Mos (' + rung.coverageYears.toFixed(1) + 'Y)</span></td>' +
+          '<td><span class="tag is-danger is-light monospace has-text-weight-bold">' + inflationDisplay + '</span> <span class="is-size-7 has-text-grey ml-1">(' + inflationDelta + ')</span></td>' +
           '<td class="monospace has-text-light has-text-weight-semibold">$' + Math.round(rung.allocatedCapital).toLocaleString() + '</td>' +
           '<td><span class="tag is-success is-light monospace has-text-weight-bold is-medium">' + yieldVal.toFixed(2) + '%</span></td>' +
           '<td class="monospace has-text-success has-text-weight-bold">+$' + Math.round(rung.lumpSumPayout).toLocaleString() + '</td>' +
-          '<td class="monospace has-text-info has-text-weight-bold">$' + Math.round(steadyCashflowRate).toLocaleString() + '/yr <span class="is-size-7 has-text-grey">($' + Math.round(steadyCashflowRate / 12).toLocaleString() + '/mo)</span></td>';
+          '<td class="monospace has-text-info has-text-weight-bold">$' + Math.round(rung.periodCashflowRate).toLocaleString() + '/yr <span class="is-size-7 has-text-grey">($' + Math.round(rung.periodCashflowRate / 12).toLocaleString() + '/mo)</span></td>';
 
         tbody.appendChild(tr);
       });
 
       const avgLadderYield = filledCapital > 0 ? (weightedYieldSum / filledCapital) : 0;
-      const filledCount = ladderSchedule.filter(r => r.selectedBond !== null).length;
+      const lastRungRate = filledRungs.length > 0 ? filledRungs[filledRungs.length - 1].periodCashflowRate : 0;
 
       document.getElementById('stat-label-1').textContent = 'Overall Ladder Yield';
       document.getElementById('stat-val-1').innerHTML = '<span class="has-text-success">' + avgLadderYield.toFixed(2) + '% p.a.</span>';
@@ -1139,18 +1130,18 @@ const HTML_CONTENT = `<!DOCTYPE html>
       document.getElementById('stat-label-2').textContent = 'Total Capital Deployed';
       document.getElementById('stat-val-2').textContent = '$' + Math.round(filledCapital).toLocaleString();
 
-      document.getElementById('stat-label-3').textContent = 'Steady Cashflow Rate';
-      document.getElementById('stat-val-3').innerHTML = '<span class="has-text-info">+$' + Math.round(steadyCashflowRate).toLocaleString() + '/yr</span>';
+      document.getElementById('stat-label-3').textContent = 'Year 1 Cashflow Rate';
+      document.getElementById('stat-val-3').innerHTML = '<span class="has-text-info">+$' + Math.round(baseYear1Rate).toLocaleString() + '/yr <span class="is-size-7 has-text-grey">($' + Math.round(baseYear1Rate/12).toLocaleString() + '/mo)</span></span>';
 
-      document.getElementById('stat-label-4').textContent = 'Active Ladder Coverage';
-      document.getElementById('stat-val-4').textContent = filledCount + ' Rungs (' + totalYearsCovered.toFixed(1) + ' Yrs)';
+      document.getElementById('stat-label-4').textContent = 'Inflation-Adjusted Final Rate';
+      document.getElementById('stat-val-4').innerHTML = '<span class="has-text-warning">+$' + Math.round(lastRungRate).toLocaleString() + '/yr</span>';
     }
 
     document.getElementById('ladder-start-date').onchange = buildBondLadder;
+    document.getElementById('ladder-inflation').oninput = buildBondLadder;
     document.getElementById('ladder-freq').onchange = buildBondLadder;
     document.getElementById('ladder-horizon').onchange = buildBondLadder;
     document.getElementById('ladder-capital').oninput = buildBondLadder;
-    document.getElementById('ladder-strategy').onchange = buildBondLadder;
 
     // 5. Master Table View Handlers
     function updateMasterMetrics() {
@@ -1520,19 +1511,19 @@ const HTML_CONTENT = `<!DOCTYPE html>
     document.getElementById('btn-export').onclick = () => {
       if (currentType === 'ladder') {
         if (!ladderSchedule.length) return;
-        const csvRows = ['Rung,TargetPayoutDate,Type,IssueCode,ISIN,MaturityDate,CoverageWindow,DynamicAllocatedCapital,IndicativeYield,LumpSumPayout,SteadyAnnualCashflowRate'];
+        const csvRows = ['Rung,TargetPayoutDate,Type,IssueCode,ISIN,MaturityDate,CoverageWindow,InflationFactor,DynamicAllocatedCapital,IndicativeYield,LumpSumPayout,InflationAdjustedAnnualCashflowRate'];
         ladderSchedule.forEach(r => {
           const b = r.selectedBond;
           const y = b ? (b.indicativeYield || 0) : 0;
           csvRows.push([
             r.rungIndex, r.targetDateStr, b ? b.secType : 'Market Gap', b ? b.issueCode : '-', b ? b.isin : '-',
-            b ? b.maturityDate : '-', r.coverageYears.toFixed(2) + ' Years', r.allocatedCapital, b ? (y + '%') : '-', r.lumpSumPayout,
-            r.allocatedCapital * (r.payoutFactor || 1)
+            b ? b.maturityDate : '-', r.coverageYears.toFixed(2) + ' Years', r.inflationFactor.toFixed(3) + 'x',
+            r.allocatedCapital, b ? (y + '%') : '-', r.lumpSumPayout, r.periodCashflowRate
           ].map(x => '"' + (x ?? '') + '"').join(','));
         });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([csvRows.join('\\n')], { type: 'text/csv' }));
-        a.download = 'sgs_bond_ladder_dynamic_schedule.csv';
+        a.download = 'sgs_inflation_adjusted_ladder_schedule.csv';
         a.click();
         return;
       }
