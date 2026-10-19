@@ -326,7 +326,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#12161a">
-  <title>LadderMaker - Singapore Government Bond Ladder & Issuances</title>
+  <title>LadderMaker - Singapore Government Bond Ladder & Cashflow Timeline</title>
   
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.2/css/bulma.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -377,7 +377,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         <div class="level-left">
           <div>
             <h1 class="title is-4 has-text-light" id="page-title">Singapore Government Securities</h1>
-            <p class="subtitle is-6 has-text-grey" id="page-subtitle">Build customized bond ladders, track auctions, secondary bonds, and yield curves</p>
+            <p class="subtitle is-6 has-text-grey" id="page-subtitle">Build customized bond ladders, track cashflow timelines, and optimize yields</p>
           </div>
         </div>
         <div class="level-right">
@@ -507,8 +507,34 @@ const HTML_CONTENT = `<!DOCTYPE html>
         <p class="mt-3 has-text-grey" id="status-text">Fetching data from MAS...</p>
       </div>
 
-      <!-- Bond Ladder View -->
+      <!-- Bond Ladder View: Timeline + Table -->
       <div id="ladder-view" class="is-hidden">
+        
+        <!-- Horizontal Scrollable Cashflow Timeline -->
+        <div class="box ladder-card mb-4 p-4">
+          <div class="level mb-2">
+            <div class="level-left">
+              <h3 class="subtitle is-6 has-text-weight-bold has-text-info mb-0">
+                <i class="fa-solid fa-timeline mr-2"></i> Cashflow Timeline & Payment Inflows
+              </h3>
+            </div>
+            <div class="level-right">
+              <span class="tag is-dark monospace is-size-7" id="timeline-count-badge">0 Scheduled Payments</span>
+            </div>
+          </div>
+          <p class="is-size-7 has-text-grey mb-3">Scroll horizontally to view upcoming semi-annual coupons and principal payouts over your ladder horizon.</p>
+          
+          <div style="overflow-x: auto; padding: 15px 5px 10px 5px; -webkit-overflow-scrolling: touch;">
+            <div style="position: relative; min-width: max-content; padding-bottom: 5px;">
+              <!-- Horizontal Rail Line -->
+              <div style="position: absolute; bottom: 31px; left: 0; right: 0; height: 3px; background: #30363d; z-index: 1;"></div>
+              <!-- Timeline Nodes Container -->
+              <div id="ladder-timeline-track" style="display: flex; align-items: flex-end; position: relative; z-index: 2;"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Ladder Rung Table -->
         <div class="table-container mb-4">
           <table class="table is-fullwidth is-hoverable is-narrow">
             <thead>
@@ -685,7 +711,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       }
     }
 
-    // 3. Bond Ladder Engine (Maximizes Ladder Yield across intervals)
+    // 3. Build Bond Ladder Engine
     function buildBondLadder() {
       const stepYears = parseFloat(document.getElementById('ladder-freq').value) || 0.5;
       const horizonYears = parseFloat(document.getElementById('ladder-horizon').value) || 3.0;
@@ -703,14 +729,12 @@ const HTML_CONTENT = `<!DOCTYPE html>
         const targetDuration = i * stepYears;
         const windowTolerance = stepYears * 0.75;
 
-        // Find candidate securities maturing around the target rung
         let candidates = availableBonds.filter(b => {
           if (usedIssueCodes.has(b.issueCode)) return false;
           const diff = Math.abs(b.durationYears - targetDuration);
           return diff <= windowTolerance;
         });
 
-        // Fallback: pick the closest available security if none in the narrow window
         if (!candidates.length) {
           candidates = availableBonds
             .filter(b => !usedIssueCodes.has(b.issueCode))
@@ -721,11 +745,9 @@ const HTML_CONTENT = `<!DOCTYPE html>
         if (candidates.length > 0) {
           let selected;
           if (strategy === 'max-yield') {
-            // Sort by highest indicative yield
             candidates.sort((a, b) => (b.indicativeYield || 0) - (a.indicativeYield || 0));
             selected = candidates[0];
           } else {
-            // Sort by closest to exact target duration
             candidates.sort((a, b) => Math.abs(a.durationYears - targetDuration) - Math.abs(b.durationYears - targetDuration));
             selected = candidates[0];
           }
@@ -743,6 +765,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
         }
       }
 
+      const cashflows = generateLadderCashflows(ladderSchedule);
+      renderLadderTimeline(cashflows);
       renderLadderTable(totalCapital);
     }
 
@@ -752,6 +776,129 @@ const HTML_CONTENT = `<!DOCTYPE html>
         return months + ' Months';
       }
       return years.toFixed(years % 1 === 0 ? 0 : 1) + ' Year' + (years > 1 ? 's' : '');
+    }
+
+    // 4. Generate & Render Scrollable Cashflow Timeline with Arrows
+    function generateLadderCashflows(schedule) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const cashflows = [];
+
+      schedule.forEach(rung => {
+        const b = rung.selectedBond;
+        const C = rung.allocatedCapital;
+        const y = b.indicativeYield || 0;
+        const matDate = parseFlexibleDate(b.maturityDate);
+
+        if (b.isTbill) {
+          // T-Bill: Total principal + discount return at maturity
+          const totalPayout = C + (C * (y / 100) * (b.durationYears || 0.5));
+          if (matDate && matDate > today) {
+            cashflows.push({
+              dateObj: matDate,
+              dateStr: formatDateStr(matDate),
+              amount: Math.round(totalPayout),
+              issueCode: b.issueCode,
+              secType: b.secType,
+              type: 'T-Bill Maturity',
+              isMaturity: true
+            });
+          }
+        } else {
+          // SGS Bond: Semi-annual coupons + principal at maturity
+          let d1 = 1, m1 = 1, d2 = 1, m2 = 7;
+          if (b.couponSchedule && b.couponSchedule.includes('&')) {
+            const match = b.couponSchedule.match(/\((\d{1,2})\s+([A-Za-z]{3})\s+&\s+(\d{1,2})\s+([A-Za-z]{3})\)/);
+            if (match) {
+              d1 = parseInt(match[1], 10);
+              m1 = MONTH_NAMES.indexOf(match[2]);
+              d2 = parseInt(match[3], 10);
+              m2 = MONTH_NAMES.indexOf(match[4]);
+            }
+          } else if (matDate) {
+            d1 = matDate.getDate();
+            m1 = (matDate.getMonth() + 6) % 12;
+            d2 = matDate.getDate();
+            m2 = matDate.getMonth();
+          }
+
+          const semiCouponAmt = Math.round(C * (y / 100) / 2);
+          const startYear = today.getFullYear();
+          const endYear = matDate ? matDate.getFullYear() : startYear + 5;
+
+          for (let yr = startYear; yr <= endYear; yr++) {
+            [ { d: d1, m: m1 }, { d: d2, m: m2 } ].forEach(item => {
+              if (item.m >= 0) {
+                const cDate = new Date(yr, item.m, item.d);
+                cDate.setHours(0, 0, 0, 0);
+
+                if (cDate > today && (!matDate || cDate.getTime() < matDate.getTime())) {
+                  cashflows.push({
+                    dateObj: cDate,
+                    dateStr: formatDateStr(cDate),
+                    amount: semiCouponAmt,
+                    issueCode: b.issueCode,
+                    secType: b.secType,
+                    type: 'Coupon Payment',
+                    isMaturity: false
+                  });
+                }
+              }
+            });
+          }
+
+          if (matDate && matDate > today) {
+            cashflows.push({
+              dateObj: matDate,
+              dateStr: formatDateStr(matDate),
+              amount: Math.round(C + semiCouponAmt),
+              issueCode: b.issueCode,
+              secType: b.secType,
+              type: 'Principal + Final Coupon',
+              isMaturity: true
+            });
+          }
+        }
+      });
+
+      cashflows.sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime());
+      return cashflows;
+    }
+
+    function renderLadderTimeline(cashflows) {
+      const container = document.getElementById('ladder-timeline-track');
+      container.innerHTML = '';
+
+      document.getElementById('timeline-count-badge').textContent = cashflows.length + ' Scheduled Payments';
+
+      if (!cashflows.length) {
+        container.innerHTML = '<div class="has-text-grey p-4">No cashflows scheduled for this configuration.</div>';
+        return;
+      }
+
+      cashflows.forEach(cf => {
+        const node = document.createElement('div');
+        node.style.cssText = 'display: inline-flex; flex-direction: column; align-items: center; min-width: 145px; text-align: center; margin-right: 20px;';
+
+        const badgeClass = cf.isMaturity ? 'is-success' : 'is-info';
+        const arrowColor = cf.isMaturity ? '#48c78e' : '#58a6ff';
+        const dotColor = cf.isMaturity ? '#48c78e' : '#58a6ff';
+
+        node.innerHTML = 
+          '<div class="box p-2 mb-2" style="background: #21262d; border: 1px solid #30363d; border-radius: 6px; width: 100%; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">' +
+            '<div class="is-size-6 monospace has-text-weight-bold ' + (cf.isMaturity ? 'has-text-success' : 'has-text-info') + '">+$' + cf.amount.toLocaleString() + '</div>' +
+            '<div class="is-size-7 has-text-weight-semibold has-text-light mt-1">' + cf.dateStr + '</div>' +
+            '<div class="is-size-7 monospace has-text-grey-light">' + cf.issueCode + '</div>' +
+            '<span class="tag is-small mt-1 ' + badgeClass + ' is-light" style="font-size: 0.65rem; height: 1.5em; padding: 0 5px;">' + cf.type + '</span>' +
+          '</div>' +
+          '<div style="color: ' + arrowColor + '; font-size: 15px; margin-bottom: -6px; z-index: 2;">' +
+            '<i class="fa-solid fa-arrow-down"></i>' +
+          '</div>' +
+          '<div style="width: 12px; height: 12px; border-radius: 50%; background: ' + dotColor + '; border: 2px solid #0d1117; z-index: 2;"></div>' +
+          '<div class="is-size-7 has-text-grey mt-1 monospace">' + MONTH_NAMES[cf.dateObj.getMonth()] + ' \'' + String(cf.dateObj.getFullYear()).slice(-2) + '</div>';
+
+        container.appendChild(node);
+      });
     }
 
     function renderLadderTable(totalCapital) {
@@ -795,7 +942,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
       const avgLadderYield = totalCapital > 0 ? (weightedYieldSum / totalCapital) : 0;
 
-      // Update Top Metrics specifically for Ladder
       document.getElementById('stat-label-1').textContent = 'Overall Ladder Yield';
       document.getElementById('stat-val-1').innerHTML = '<span class="has-text-success">' + avgLadderYield.toFixed(2) + '% p.a.</span>';
 
@@ -809,13 +955,12 @@ const HTML_CONTENT = `<!DOCTYPE html>
       document.getElementById('stat-val-4').textContent = ladderSchedule.length + ' Maturities';
     }
 
-    // Ladder Controls Event Listeners
     document.getElementById('ladder-freq').onchange = buildBondLadder;
     document.getElementById('ladder-horizon').onchange = buildBondLadder;
     document.getElementById('ladder-capital').oninput = buildBondLadder;
     document.getElementById('ladder-strategy').onchange = buildBondLadder;
 
-    // 4. Master Table View Handlers
+    // 5. Master Table View Handlers
     function updateMasterMetrics() {
       document.getElementById('stat-label-1').textContent = 'Total Valid Issues';
       document.getElementById('stat-val-1').textContent = allRecords.length;
@@ -895,7 +1040,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       });
     }
 
-    // 5. Yield Curve View Handlers
+    // 6. Yield Curve View Handlers
     function renderYieldCurveView() {
       document.getElementById('ladder-view').classList.add('is-hidden');
       document.getElementById('table-wrapper').classList.add('is-hidden');
@@ -1059,7 +1204,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       });
     }
 
-    // 6. Standard Tab Handlers (All, Primary, Secondary)
+    // 7. Standard Tab Handlers (All, Primary, Secondary)
     function updateStandardMetrics(isSecondary) {
       document.getElementById('stat-label-1').textContent = 'Securities Listed';
       document.getElementById('stat-val-1').textContent = allRecords.length;
@@ -1149,7 +1294,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       });
     }
 
-    // 7. Navigation Tabs
+    // 8. Navigation Tabs
     document.querySelectorAll('#category-tabs li').forEach(tab => {
       tab.onclick = () => {
         document.querySelectorAll('#category-tabs li').forEach(t => t.classList.remove('is-active'));
@@ -1174,7 +1319,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       }
     };
 
-    // 8. Refresh & CSV Export
+    // 9. Refresh & CSV Export
     document.getElementById('btn-refresh').onclick = () => {
       masterDataCache = null;
       loadData();
