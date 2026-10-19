@@ -39,7 +39,6 @@ function formatDateStr(dateObj) {
 
 // Helper: Calculate Coupon Payment Schedule
 function getCouponPaymentInfo(secType, matDateObj, interestDate1, interestDate2) {
-  // 1. T-Bills: Zero-coupon discount securities, paid at maturity
   if (secType.includes('T-Bill')) {
     const matStr = matDateObj ? formatDateStr(matDateObj) : 'Maturity';
     return {
@@ -49,10 +48,8 @@ function getCouponPaymentInfo(secType, matDateObj, interestDate1, interestDate2)
     };
   }
 
-  // 2. SGS Bonds: Semi-annual coupons (every 6 months)
   let day1, month1, day2, month2;
 
-  // Check explicit MAS interest dates (e.g., "01/05" and "01/11")
   if (interestDate1 && interestDate1.includes('/')) {
     const p1 = interestDate1.split('/');
     day1 = parseInt(p1[0], 10);
@@ -64,7 +61,6 @@ function getCouponPaymentInfo(secType, matDateObj, interestDate1, interestDate2)
     month2 = parseInt(p2[1], 10) - 1;
   }
 
-  // If not provided in primary record, derive semi-annual cycle from maturity date
   if ((day1 === undefined || isNaN(day1)) && matDateObj) {
     day1 = matDateObj.getDate();
     month1 = (matDateObj.getMonth() + 6) % 12;
@@ -127,7 +123,7 @@ function calculateIndicativeYield(durationYears, curve) {
   return null;
 }
 
-// 1. Scrape SGS Yield Curve from MAS
+// 1. Scrape SGS Yield Curve from MAS (Strictly Yields < 20%)
 async function getSGSYieldCurve() {
   try {
     const { data: html } = await axios.get(YIELD_CURVE_URL, {
@@ -249,7 +245,7 @@ async function getMasterTableData() {
 
   const masterList = [];
 
-  // A. Primary SGS & T-Bills (Auction Date >= Today)
+  // Primary SGS & T-Bills (Auction Date >= Today)
   const primaryAll = [
     ...sgsRecords.map(r => ({ ...r, _secType: 'Primary SGS' })),
     ...tbillRecords.map(r => ({ ...r, _secType: 'Primary T-Bill' }))
@@ -288,7 +284,7 @@ async function getMasterTableData() {
     });
   });
 
-  // B. Secondary Market Bonds (Maturity Date > Today)
+  // Secondary Market Bonds (Maturity Date > Today)
   secondaryBonds.forEach(b => {
     const matDateObj = parseFlexibleDate(b.maturityDate);
     if (!matDateObj || matDateObj <= today) return;
@@ -330,7 +326,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#12161a">
-  <title>LadderMaker - Master Table with Coupon Schedules</title>
+  <title>LadderMaker - Singapore Government Bond Ladder & Issuances</title>
   
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.2/css/bulma.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -349,6 +345,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
     .tabs.is-boxed li.is-active a { background-color: #21262d; border-color: #30363d #30363d transparent; color: #58a6ff; font-weight: bold; }
     .tabs.is-boxed a { border-color: transparent; }
     .chart-container { background-color: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.5rem; }
+    .ladder-card { background-color: #161b22; border: 1px solid #30363d; border-radius: 8px; }
+    .rung-step { width: 34px; height: 34px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: bold; }
   </style>
 </head>
 <body>
@@ -374,11 +372,12 @@ const HTML_CONTENT = `<!DOCTYPE html>
   <main class="section main-container">
     <div class="container">
 
+      <!-- Header Level -->
       <div class="level mb-4">
         <div class="level-left">
           <div>
             <h1 class="title is-4 has-text-light" id="page-title">Singapore Government Securities</h1>
-            <p class="subtitle is-6 has-text-grey" id="page-subtitle">Track primary auctions, secondary bonds, coupon payment dates, and yield curve interpolation</p>
+            <p class="subtitle is-6 has-text-grey" id="page-subtitle">Build customized bond ladders, track auctions, secondary bonds, and yield curves</p>
           </div>
         </div>
         <div class="level-right">
@@ -389,6 +388,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         </div>
       </div>
 
+      <!-- Quick Metrics Panel -->
       <div class="columns is-multiline mb-4" id="metrics-panel">
         <div class="column is-3">
           <div class="box summary-card py-3">
@@ -416,11 +416,13 @@ const HTML_CONTENT = `<!DOCTYPE html>
         </div>
       </div>
 
+      <!-- Navigation Tabs & Year Selector -->
       <div class="level mb-3">
         <div class="level-left">
           <div class="tabs is-boxed is-small mb-0" id="category-tabs">
             <ul>
-              <li class="is-active" data-type="master"><a><i class="fa-solid fa-layer-group mr-2 has-text-warning"></i> Master Table</a></li>
+              <li class="is-active" data-type="ladder"><a><i class="fa-solid fa-stairs mr-2 has-text-success"></i> Bond Ladder</a></li>
+              <li data-type="master"><a><i class="fa-solid fa-layer-group mr-2 has-text-warning"></i> Master Table</a></li>
               <li data-type="all"><a><i class="fa-solid fa-list mr-2"></i> All Primary</a></li>
               <li data-type="sgs"><a><i class="fa-solid fa-building-columns mr-2"></i> Primary SGS</a></li>
               <li data-type="tbill"><a><i class="fa-solid fa-money-bill-trend-up mr-2"></i> Primary T-Bills</a></li>
@@ -441,18 +443,92 @@ const HTML_CONTENT = `<!DOCTYPE html>
         </div>
       </div>
 
+      <!-- Bond Ladder Configuration Controls -->
+      <div id="ladder-controls-panel" class="box ladder-card mb-4 p-4">
+        <div class="columns is-multiline is-vcentered">
+          <div class="column is-3">
+            <label class="label is-small has-text-grey">Payment / Rung Frequency</label>
+            <div class="control">
+              <div class="select is-small is-fullwidth is-dark">
+                <select id="ladder-freq">
+                  <option value="0.25">Every 3 Months (Quarterly)</option>
+                  <option value="0.5" selected>Every 6 Months (Semi-Annually)</option>
+                  <option value="1.0">Every 1 Year (Annually)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="column is-3">
+            <label class="label is-small has-text-grey">Ladder Horizon (Duration)</label>
+            <div class="control">
+              <div class="select is-small is-fullwidth is-dark">
+                <select id="ladder-horizon">
+                  <option value="1">1 Year</option>
+                  <option value="2">2 Years</option>
+                  <option value="3" selected>3 Years</option>
+                  <option value="5">5 Years</option>
+                  <option value="10">10 Years</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="column is-3">
+            <label class="label is-small has-text-grey">Total Capital to Invest (SGD)</label>
+            <div class="control has-icons-left">
+              <input class="input is-small is-dark monospace" type="number" id="ladder-capital" value="60000" step="5000" min="1000">
+              <span class="icon is-small is-left has-text-grey">$</span>
+            </div>
+          </div>
+          <div class="column is-3">
+            <label class="label is-small has-text-grey">Optimization Mode</label>
+            <div class="control">
+              <div class="select is-small is-fullwidth is-dark">
+                <select id="ladder-strategy">
+                  <option value="max-yield" selected>Max Yield (Highest Ladder Return)</option>
+                  <option value="closest">Closest to Exact Rung Date</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Search Box (Hidden in Yield Curve & Ladder views) -->
       <div class="field mb-4" id="search-wrapper">
         <p class="control has-icons-left">
-          <input id="search-input" class="input is-rounded is-dark" type="text" placeholder="Search by issue code, ISIN, maturity date, coupon dates, yield...">
+          <input id="search-input" class="input is-rounded is-dark" type="text" placeholder="Search by issue code, ISIN, maturity date, yield...">
           <span class="icon is-small is-left"><i class="fas fa-search"></i></span>
         </p>
       </div>
 
+      <!-- Loading Spinner -->
       <div id="status-container" class="has-text-centered py-6">
         <span class="icon is-large has-text-info"><i class="fas fa-2x fa-spinner fa-spin"></i></span>
         <p class="mt-3 has-text-grey" id="status-text">Fetching data from MAS...</p>
       </div>
 
+      <!-- Bond Ladder View -->
+      <div id="ladder-view" class="is-hidden">
+        <div class="table-container mb-4">
+          <table class="table is-fullwidth is-hoverable is-narrow">
+            <thead>
+              <tr>
+                <th>RUNG</th>
+                <th>TARGET PERIOD</th>
+                <th>SELECTED SECURITY</th>
+                <th>MATURITY DATE</th>
+                <th>COUPON PAYMENT SCHEDULE</th>
+                <th>ALLOCATED CAPITAL</th>
+                <th>INDICATIVE YIELD</th>
+                <th>EST. ANNUAL CASHFLOW</th>
+              </tr>
+            </thead>
+            <tbody id="ladder-table-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Master & Standard Table Section -->
       <div id="table-wrapper" class="table-container is-hidden">
         <table class="table is-fullwidth is-hoverable is-narrow">
           <thead><tr id="table-head-row"></tr></thead>
@@ -460,6 +536,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         </table>
       </div>
 
+      <!-- Dedicated Yield Curve View -->
       <div id="curve-wrapper" class="is-hidden">
         <div class="box chart-container mb-4">
           <div class="level mb-2">
@@ -492,6 +569,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         </div>
       </div>
 
+      <!-- Empty State -->
       <div id="empty-state" class="notification is-dark has-text-centered is-hidden mt-4">
         <i class="fa-solid fa-circle-info mr-2"></i> No records found matching the criteria.
       </div>
@@ -499,19 +577,20 @@ const HTML_CONTENT = `<!DOCTYPE html>
   </main>
 
   <script>
-    let currentType = 'master';
+    let currentType = 'ladder';
     let currentYear = new Date().getFullYear();
     let allRecords = [];
     let displayedRecords = [];
+    let masterDataCache = null;
     let yieldCurveData = null;
-    let masterMeta = null;
+    let ladderSchedule = [];
     let sortColumn = null;
     let sortAsc = true;
 
     // 1. Initialize PWA
     (function initPWA() {
       const manifest = {
-        name: "LadderMaker - SGS Master Suite",
+        name: "LadderMaker - Singapore Bond Ladder",
         short_name: "LadderMaker",
         start_url: "./",
         display: "standalone",
@@ -545,30 +624,41 @@ const HTML_CONTENT = `<!DOCTYPE html>
     async function loadData() {
       showLoading(true);
 
+      const isLadder = currentType === 'ladder';
       const isMaster = currentType === 'master';
       const isCurve = currentType === 'curve';
       const isSecondary = currentType === 'secondary';
 
-      document.getElementById('year-wrapper').style.visibility = (isMaster || isSecondary || isCurve) ? 'hidden' : 'visible';
-      document.getElementById('search-wrapper').classList.toggle('is-hidden', isCurve);
+      document.getElementById('year-wrapper').style.visibility = (isLadder || isMaster || isSecondary || isCurve) ? 'hidden' : 'visible';
+      document.getElementById('ladder-controls-panel').classList.toggle('is-hidden', !isLadder);
+      document.getElementById('search-wrapper').classList.toggle('is-hidden', isCurve || isLadder);
 
       try {
         if (isCurve) {
           const res = await axios.get('/api/yield-curve');
           yieldCurveData = res.data;
           renderYieldCurveView();
-        } else if (isMaster) {
-          const res = await axios.get('/api/master');
-          masterMeta = res.data;
-          allRecords = res.data.records || [];
+        } else if (isLadder || isMaster) {
+          if (!masterDataCache) {
+            const res = await axios.get('/api/master');
+            masterDataCache = res.data;
+          }
+          allRecords = masterDataCache.records || [];
           displayedRecords = [...allRecords];
 
           document.getElementById('curve-wrapper').classList.add('is-hidden');
-          document.getElementById('table-wrapper').classList.remove('is-hidden');
 
-          updateMasterMetrics();
-          renderMasterHeaders();
-          renderMasterBody();
+          if (isLadder) {
+            document.getElementById('table-wrapper').classList.add('is-hidden');
+            document.getElementById('ladder-view').classList.remove('is-hidden');
+            buildBondLadder();
+          } else {
+            document.getElementById('ladder-view').classList.add('is-hidden');
+            document.getElementById('table-wrapper').classList.remove('is-hidden');
+            updateMasterMetrics();
+            renderMasterHeaders();
+            renderMasterBody();
+          }
         } else {
           const endpoint = isSecondary 
             ? '/api/secondary-market'
@@ -578,6 +668,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
           allRecords = res.data || [];
           displayedRecords = [...allRecords];
 
+          document.getElementById('ladder-view').classList.add('is-hidden');
           document.getElementById('curve-wrapper').classList.add('is-hidden');
           document.getElementById('table-wrapper').classList.remove('is-hidden');
 
@@ -594,7 +685,137 @@ const HTML_CONTENT = `<!DOCTYPE html>
       }
     }
 
-    // 3. Render Master Table (With Coupon Payment Dates)
+    // 3. Bond Ladder Engine (Maximizes Ladder Yield across intervals)
+    function buildBondLadder() {
+      const stepYears = parseFloat(document.getElementById('ladder-freq').value) || 0.5;
+      const horizonYears = parseFloat(document.getElementById('ladder-horizon').value) || 3.0;
+      const totalCapital = parseFloat(document.getElementById('ladder-capital').value) || 60000;
+      const strategy = document.getElementById('ladder-strategy').value;
+
+      const numRungs = Math.round(horizonYears / stepYears);
+      const capitalPerRung = totalCapital / Math.max(1, numRungs);
+
+      const availableBonds = [...allRecords];
+      const usedIssueCodes = new Set();
+      ladderSchedule = [];
+
+      for (let i = 1; i <= numRungs; i++) {
+        const targetDuration = i * stepYears;
+        const windowTolerance = stepYears * 0.75;
+
+        // Find candidate securities maturing around the target rung
+        let candidates = availableBonds.filter(b => {
+          if (usedIssueCodes.has(b.issueCode)) return false;
+          const diff = Math.abs(b.durationYears - targetDuration);
+          return diff <= windowTolerance;
+        });
+
+        // Fallback: pick the closest available security if none in the narrow window
+        if (!candidates.length) {
+          candidates = availableBonds
+            .filter(b => !usedIssueCodes.has(b.issueCode))
+            .sort((a, b) => Math.abs(a.durationYears - targetDuration) - Math.abs(b.durationYears - targetDuration))
+            .slice(0, 3);
+        }
+
+        if (candidates.length > 0) {
+          let selected;
+          if (strategy === 'max-yield') {
+            // Sort by highest indicative yield
+            candidates.sort((a, b) => (b.indicativeYield || 0) - (a.indicativeYield || 0));
+            selected = candidates[0];
+          } else {
+            // Sort by closest to exact target duration
+            candidates.sort((a, b) => Math.abs(a.durationYears - targetDuration) - Math.abs(b.durationYears - targetDuration));
+            selected = candidates[0];
+          }
+
+          usedIssueCodes.add(selected.issueCode);
+
+          ladderSchedule.push({
+            rungIndex: i,
+            targetPeriodStr: formatTargetPeriod(targetDuration),
+            targetDuration: targetDuration,
+            selectedBond: selected,
+            allocatedCapital: capitalPerRung,
+            candidates: candidates
+          });
+        }
+      }
+
+      renderLadderTable(totalCapital);
+    }
+
+    function formatTargetPeriod(years) {
+      if (years < 1) {
+        const months = Math.round(years * 12);
+        return months + ' Months';
+      }
+      return years.toFixed(years % 1 === 0 ? 0 : 1) + ' Year' + (years > 1 ? 's' : '');
+    }
+
+    function renderLadderTable(totalCapital) {
+      const tbody = document.getElementById('ladder-table-body');
+      tbody.innerHTML = '';
+
+      if (!ladderSchedule.length) {
+        document.getElementById('empty-state').classList.remove('is-hidden');
+        return;
+      }
+      document.getElementById('empty-state').classList.add('is-hidden');
+
+      let weightedYieldSum = 0;
+      let totalEstAnnualIncome = 0;
+
+      ladderSchedule.forEach(rung => {
+        const b = rung.selectedBond;
+        const yieldVal = b.indicativeYield || 0;
+        const annualIncome = (rung.allocatedCapital * yieldVal) / 100;
+
+        weightedYieldSum += yieldVal * rung.allocatedCapital;
+        totalEstAnnualIncome += annualIncome;
+
+        const tagClass = b.secType === 'Primary SGS' ? 'is-primary' : (b.secType === 'Primary T-Bill' ? 'is-info' : 'is-warning');
+        const badgeColor = rung.rungIndex % 2 === 0 ? 'background-color: #238636;' : 'background-color: #1f6feb;';
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td><span class="rung-step has-text-white is-size-7" style="' + badgeColor + '">' + rung.rungIndex + '</span></td>' +
+          '<td><span class="tag is-dark monospace has-text-weight-bold">~' + rung.targetPeriodStr + '</span></td>' +
+          '<td><span class="monospace has-text-weight-bold has-text-light">' + b.issueCode + '</span> <span class="tag is-small ml-2 ' + tagClass + '">' + b.secType + '</span></td>' +
+          '<td class="has-text-weight-medium">' + b.maturityDate + '</td>' +
+          '<td>' + (b.isTbill 
+            ? '<span class="tag is-dark is-light"><i class="fa-solid fa-flag-checkered mr-1 has-text-info"></i> ' + b.couponSchedule + '</span>' 
+            : '<span class="tag is-primary is-light has-text-weight-bold"><i class="fa-solid fa-arrows-rotate mr-1"></i> ' + b.couponSchedule + '</span>') + '</td>' +
+          '<td class="monospace has-text-light">$' + Math.round(rung.allocatedCapital).toLocaleString() + '</td>' +
+          '<td><span class="tag is-success is-light monospace has-text-weight-bold is-medium">' + yieldVal.toFixed(2) + '%</span></td>' +
+          '<td class="monospace has-text-success has-text-weight-bold">+$' + Math.round(annualIncome).toLocaleString() + '/yr</td>';
+
+        tbody.appendChild(tr);
+      });
+
+      const avgLadderYield = totalCapital > 0 ? (weightedYieldSum / totalCapital) : 0;
+
+      // Update Top Metrics specifically for Ladder
+      document.getElementById('stat-label-1').textContent = 'Overall Ladder Yield';
+      document.getElementById('stat-val-1').innerHTML = '<span class="has-text-success">' + avgLadderYield.toFixed(2) + '% p.a.</span>';
+
+      document.getElementById('stat-label-2').textContent = 'Total Capital';
+      document.getElementById('stat-val-2').textContent = '$' + Math.round(totalCapital).toLocaleString();
+
+      document.getElementById('stat-label-3').textContent = 'Est. Annual Cashflow';
+      document.getElementById('stat-val-3').innerHTML = '<span class="has-text-info">+$' + Math.round(totalEstAnnualIncome).toLocaleString() + '</span>';
+
+      document.getElementById('stat-label-4').textContent = 'Active Rungs';
+      document.getElementById('stat-val-4').textContent = ladderSchedule.length + ' Maturities';
+    }
+
+    // Ladder Controls Event Listeners
+    document.getElementById('ladder-freq').onchange = buildBondLadder;
+    document.getElementById('ladder-horizon').onchange = buildBondLadder;
+    document.getElementById('ladder-capital').oninput = buildBondLadder;
+    document.getElementById('ladder-strategy').onchange = buildBondLadder;
+
+    // 4. Master Table View Handlers
     function updateMasterMetrics() {
       document.getElementById('stat-label-1').textContent = 'Total Valid Issues';
       document.getElementById('stat-val-1').textContent = allRecords.length;
@@ -608,7 +829,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       document.getElementById('stat-val-3').textContent = secCount;
 
       document.getElementById('stat-label-4').textContent = 'Curve Benchmark Date';
-      document.getElementById('stat-val-4').textContent = masterMeta?.curveDate || '-';
+      document.getElementById('stat-val-4').textContent = masterDataCache?.curveDate || '-';
     }
 
     function renderMasterHeaders() {
@@ -637,7 +858,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
             if (typeof vA === 'number' && typeof vB === 'number') {
               return sortAsc ? vA - vB : vB - vA;
             }
-            return sortAsc ? String(vA).localeCompare(String(vB)) : String(vB).localeCompare(String(vA));
+            return sortAsc ? String(vA).localeCompare(String(vB)) : String(vB).localeCompare(String(a[k]));
           });
           renderMasterBody();
         };
@@ -656,33 +877,16 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
       displayedRecords.forEach(r => {
         const tr = document.createElement('tr');
-
-        // Col 1: Issue Code + Badge
         const tagClass = r.secType === 'Primary SGS' ? 'is-primary' : (r.secType === 'Primary T-Bill' ? 'is-info' : 'is-warning');
         const col1 = '<td><span class="monospace has-text-weight-bold has-text-light">' + r.issueCode + '</span> <span class="tag is-small ml-2 ' + tagClass + '">' + r.secType + '</span></td>';
-
-        // Col 2: ISIN
         const col2 = '<td><span class="monospace has-text-grey-light">' + (r.isin || '-') + '</span></td>';
-
-        // Col 3: Maturity Date
         const col3 = '<td class="has-text-weight-medium">' + r.maturityDate + '</td>';
-
-        // Col 4: Auction Date
         const col4 = '<td>' + (r.auctionDate !== '-' ? '<span class="has-text-info monospace"><i class="fa-regular fa-calendar-check mr-1"></i>' + r.auctionDate + '</span>' : '<span class="has-text-grey">-</span>') + '</td>';
-
-        // Col 5: Issue Date
         const col5 = '<td class="has-text-grey-light">' + r.issueDate + '</td>';
-
-        // Col 6: Coupon Payment Dates
-        let col6Content = '';
-        if (r.isTbill) {
-          col6Content = '<span class="tag is-dark is-light"><i class="fa-solid fa-flag-checkered mr-1 has-text-info"></i> ' + r.couponSchedule + '</span>';
-        } else {
-          col6Content = '<span class="tag is-primary is-light has-text-weight-bold"><i class="fa-solid fa-arrows-rotate mr-1"></i> ' + r.couponSchedule + '</span>';
-        }
+        const col6Content = r.isTbill 
+          ? '<span class="tag is-dark is-light"><i class="fa-solid fa-flag-checkered mr-1 has-text-info"></i> ' + r.couponSchedule + '</span>' 
+          : '<span class="tag is-primary is-light has-text-weight-bold"><i class="fa-solid fa-arrows-rotate mr-1"></i> ' + r.couponSchedule + '</span>';
         const col6 = '<td>' + col6Content + '</td>';
-
-        // Col 7: Indicative Yield
         const yieldVal = r.indicativeYield !== null ? r.indicativeYield.toFixed(2) + '%' : '<span class="has-text-grey">-</span>';
         const col7 = '<td><span class="tag is-success is-light monospace has-text-weight-bold is-medium">' + yieldVal + '</span> <span class="is-size-7 has-text-grey ml-1">(' + r.durationYears + 'Y)</span></td>';
 
@@ -691,8 +895,9 @@ const HTML_CONTENT = `<!DOCTYPE html>
       });
     }
 
-    // 4. Render Yield Curve View
+    // 5. Yield Curve View Handlers
     function renderYieldCurveView() {
+      document.getElementById('ladder-view').classList.add('is-hidden');
       document.getElementById('table-wrapper').classList.add('is-hidden');
       document.getElementById('curve-wrapper').classList.remove('is-hidden');
 
@@ -854,7 +1059,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       });
     }
 
-    // 5. Standard Tab Handlers (All, Primary, Secondary)
+    // 6. Standard Tab Handlers (All, Primary, Secondary)
     function updateStandardMetrics(isSecondary) {
       document.getElementById('stat-label-1').textContent = 'Securities Listed';
       document.getElementById('stat-val-1').textContent = allRecords.length;
@@ -944,7 +1149,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       });
     }
 
-    // 6. Navigation Tabs
+    // 7. Navigation Tabs
     document.querySelectorAll('#category-tabs li').forEach(tab => {
       tab.onclick = () => {
         document.querySelectorAll('#category-tabs li').forEach(t => t.classList.remove('is-active'));
@@ -969,10 +1174,32 @@ const HTML_CONTENT = `<!DOCTYPE html>
       }
     };
 
-    // 7. Refresh & CSV Export
-    document.getElementById('btn-refresh').onclick = loadData;
+    // 8. Refresh & CSV Export
+    document.getElementById('btn-refresh').onclick = () => {
+      masterDataCache = null;
+      loadData();
+    };
 
     document.getElementById('btn-export').onclick = () => {
+      if (currentType === 'ladder') {
+        if (!ladderSchedule.length) return;
+        const csvRows = ['Rung,TargetPeriod,Type,IssueCode,ISIN,MaturityDate,CouponSchedule,AllocatedCapital,IndicativeYield,EstAnnualIncome'];
+        ladderSchedule.forEach(r => {
+          const b = r.selectedBond;
+          const y = b.indicativeYield || 0;
+          const inc = (r.allocatedCapital * y) / 100;
+          csvRows.push([
+            r.rungIndex, r.targetPeriodStr, b.secType, b.issueCode, b.isin,
+            b.maturityDate, b.couponSchedule, r.allocatedCapital, y + '%', inc
+          ].map(x => '"' + (x ?? '') + '"').join(','));
+        });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([csvRows.join('\\n')], { type: 'text/csv' }));
+        a.download = 'sgs_bond_ladder_schedule.csv';
+        a.click();
+        return;
+      }
+
       if (currentType === 'master') {
         if (!displayedRecords.length) return;
         const csvRows = ['Type,IssueCode,ISIN,MaturityDate,AuctionDate,IssueDate,CouponPaymentDates,DurationYears,IndicativeYield'];
@@ -1021,6 +1248,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       document.getElementById('status-container').classList.toggle('is-hidden', !show);
       if (show) {
         document.getElementById('table-wrapper').classList.add('is-hidden');
+        document.getElementById('ladder-view').classList.add('is-hidden');
         document.getElementById('curve-wrapper').classList.add('is-hidden');
         document.getElementById('empty-state').classList.add('is-hidden');
       }
