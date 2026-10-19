@@ -123,7 +123,7 @@ function calculateIndicativeYield(durationYears, curve) {
   return null;
 }
 
-// 1. Scrape SGS Yield Curve from MAS (Timeout-safe)
+// 1. Scrape SGS Yield Curve from MAS
 async function getSGSYieldCurve() {
   try {
     const { data: html } = await axios.get(YIELD_CURVE_URL, {
@@ -163,7 +163,7 @@ async function getSGSYieldCurve() {
   }
 }
 
-// 2. Scrape Secondary Market Bonds (Timeout-safe)
+// 2. Scrape Secondary Market Bonds
 async function scrapeMASSecondaryMarket() {
   try {
     const { data } = await axios.get(SECONDARY_MARKET_URL, {
@@ -205,7 +205,7 @@ async function scrapeMASSecondaryMarket() {
   }
 }
 
-// 3. Fetch Primary MAS API using Axios
+// 3. Fetch Primary MAS API
 async function fetchMasApi(endpoint, filters, sort = 'ann_date asc') {
   try {
     const res = await axios.get(`${BASE_MAS_URL}${endpoint}`, {
@@ -555,7 +555,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
               <span class="tag is-dark monospace is-size-7" id="timeline-count-badge">0 Scheduled Payments</span>
             </div>
           </div>
-          <p class="is-size-7 has-text-grey mb-3">Scroll horizontally to view upcoming semi-annual coupons and annual principal payouts starting from your designated first payment date.</p>
+          <p class="is-size-7 has-text-grey mb-3">Scroll horizontally to view upcoming coupon payouts and principal maturity returns coming in over your horizon.</p>
           
           <div style="overflow-x: auto; padding: 15px 5px 10px 5px; -webkit-overflow-scrolling: touch;">
             <div style="position: relative; min-width: max-content; padding-bottom: 5px;">
@@ -783,14 +783,13 @@ const HTML_CONTENT = `<!DOCTYPE html>
       }
     }
 
-    // 3. Build Bond Ladder Engine (Respecting Start Payment Date)
+    // 3. Robust Bond Ladder Engine (Strict Tenor & Chronological Constraints)
     function buildBondLadder() {
       const stepYears = parseFloat(document.getElementById('ladder-freq').value) || 1.0;
       const horizonYears = parseFloat(document.getElementById('ladder-horizon').value) || 5.0;
       const totalCapital = parseFloat(document.getElementById('ladder-capital').value) || 100000;
       const strategy = document.getElementById('ladder-strategy').value;
 
-      // Parse user's selected First Payment Date
       const startDateInput = document.getElementById('ladder-start-date').value;
       let firstPaymentDate = new Date(startDateInput);
       if (isNaN(firstPaymentDate.getTime())) {
@@ -799,6 +798,9 @@ const HTML_CONTENT = `<!DOCTYPE html>
       }
       firstPaymentDate.setHours(0, 0, 0, 0);
 
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
       const numRungs = Math.round(horizonYears / stepYears);
       const capitalPerRung = totalCapital / Math.max(1, numRungs);
 
@@ -806,38 +808,56 @@ const HTML_CONTENT = `<!DOCTYPE html>
       const usedIssueCodes = new Set();
       ladderSchedule = [];
 
+      let lastMaturityTimestamp = 0;
+
       for (let i = 1; i <= numRungs; i++) {
         // Calculate the target maturity date for this rung
-        // Rung 1 = firstPaymentDate
-        // Rung 2 = firstPaymentDate + 1 interval, etc.
         const targetDateObj = new Date(firstPaymentDate.getTime());
         const monthsToAdd = Math.round((i - 1) * stepYears * 12);
         targetDateObj.setMonth(targetDateObj.getMonth() + monthsToAdd);
 
-        const windowToleranceDays = stepYears * 365.25 * 0.75;
+        const durationFromTodayYears = (targetDateObj - today) / (365.25 * 86400000);
 
-        // Find candidate securities maturing closest to this target date
+        // Window tolerance: +/- 200 days for annual, +/- 100 days for 6M
+        const windowDays = Math.max(45, Math.round(stepYears * 365.25 * 0.55));
+
+        // Filter valid candidates with strict rules:
         let candidates = availableBonds.filter(b => {
           if (usedIssueCodes.has(b.issueCode)) return false;
+
           const mat = parseFlexibleDate(b.maturityDate);
           if (!mat) return false;
+
+          // RULE 1: T-Bills can NEVER be matched to target dates > 1.2 years away!
+          if (b.isTbill && durationFromTodayYears > 1.2) {
+            return false;
+          }
+
+          // RULE 2: Chronological progression - maturity cannot be months before previous rung
+          if (lastMaturityTimestamp > 0 && mat.getTime() < (lastMaturityTimestamp - 45 * 86400000)) {
+            return false;
+          }
+
+          // RULE 3: Must fall within the target date window
           const diffDays = Math.abs((mat - targetDateObj) / 86400000);
-          return diffDays <= windowToleranceDays;
+          return diffDays <= windowDays;
         });
 
-        if (!candidates.length) {
-          candidates = availableBonds
-            .filter(b => !usedIssueCodes.has(b.issueCode) && parseFlexibleDate(b.maturityDate))
-            .sort((a, b) => {
-              const diffA = Math.abs((parseFlexibleDate(a.maturityDate) - targetDateObj) / 86400000);
-              const diffB = Math.abs((parseFlexibleDate(b.maturityDate) - targetDateObj) / 86400000);
-              return diffA - diffB;
-            })
-            .slice(0, 3);
+        // Fallback for multi-year SGS bonds only (never T-bills) within 1 year maximum buffer
+        if (!candidates.length && durationFromTodayYears > 1.2) {
+          const maxAllowedDiffDays = Math.min(365, stepYears * 365.25 * 0.9);
+          candidates = availableBonds.filter(b => {
+            if (usedIssueCodes.has(b.issueCode) || b.isTbill) return false;
+            const mat = parseFlexibleDate(b.maturityDate);
+            if (!mat) return false;
+            if (lastMaturityTimestamp > 0 && mat.getTime() < lastMaturityTimestamp) return false;
+            const diffDays = Math.abs((mat - targetDateObj) / 86400000);
+            return diffDays <= maxAllowedDiffDays;
+          });
         }
 
+        let selected = null;
         if (candidates.length > 0) {
-          let selected;
           if (strategy === 'max-yield') {
             candidates.sort((a, b) => (b.indicativeYield || 0) - (a.indicativeYield || 0));
             selected = candidates[0];
@@ -851,16 +871,18 @@ const HTML_CONTENT = `<!DOCTYPE html>
           }
 
           usedIssueCodes.add(selected.issueCode);
-
-          ladderSchedule.push({
-            rungIndex: i,
-            targetDateObj: targetDateObj,
-            targetDateStr: formatDateStr(targetDateObj),
-            selectedBond: selected,
-            allocatedCapital: capitalPerRung,
-            candidates: candidates
-          });
+          const selMat = parseFlexibleDate(selected.maturityDate);
+          if (selMat) lastMaturityTimestamp = selMat.getTime();
         }
+
+        ladderSchedule.push({
+          rungIndex: i,
+          targetDateObj: targetDateObj,
+          targetDateStr: formatDateStr(targetDateObj),
+          selectedBond: selected,
+          allocatedCapital: capitalPerRung,
+          candidates: candidates
+        });
       }
 
       const cashflows = generateLadderCashflows(ladderSchedule);
@@ -876,6 +898,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
       schedule.forEach(rung => {
         const b = rung.selectedBond;
+        if (!b) return; // Skip unfilled rungs
+
         const C = rung.allocatedCapital;
         const y = b.indicativeYield || 0;
         const matDate = parseFlexibleDate(b.maturityDate);
@@ -1023,19 +1047,36 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
       let weightedYieldSum = 0;
       let totalEstAnnualIncome = 0;
+      let filledCapital = 0;
 
       ladderSchedule.forEach(rung => {
         const b = rung.selectedBond;
+        const tr = document.createElement('tr');
+        const badgeColor = rung.rungIndex % 2 === 0 ? 'background-color: #238636;' : 'background-color: #1f6feb;';
+
+        // Case A: No security matching this rung's window in the Singapore bond market
+        if (!b) {
+          tr.innerHTML = '<td><span class="rung-step has-text-grey" style="background-color: #30363d;">' + rung.rungIndex + '</span></td>' +
+            '<td><span class="tag is-warning is-light monospace has-text-weight-bold"><i class="fa-regular fa-calendar-check mr-1"></i> ' + rung.targetDateStr + '</span></td>' +
+            '<td colspan="2"><span class="tag is-dark has-text-warning"><i class="fa-solid fa-triangle-exclamation mr-1"></i> No SGS issue maturing in this period</span></td>' +
+            '<td><span class="has-text-grey">Hold in SORA / Cash Reserve</span></td>' +
+            '<td class="monospace has-text-grey">$' + Math.round(rung.allocatedCapital).toLocaleString() + '</td>' +
+            '<td><span class="has-text-grey">-</span></td>' +
+            '<td><span class="has-text-grey">-</span></td>';
+          tbody.appendChild(tr);
+          return;
+        }
+
+        // Case B: Valid matching security
         const yieldVal = b.indicativeYield || 0;
         const annualIncome = (rung.allocatedCapital * yieldVal) / 100;
 
         weightedYieldSum += yieldVal * rung.allocatedCapital;
         totalEstAnnualIncome += annualIncome;
+        filledCapital += rung.allocatedCapital;
 
         const tagClass = b.secType === 'Primary SGS' ? 'is-primary' : (b.secType === 'Primary T-Bill' ? 'is-info' : 'is-warning');
-        const badgeColor = rung.rungIndex % 2 === 0 ? 'background-color: #238636;' : 'background-color: #1f6feb;';
 
-        const tr = document.createElement('tr');
         tr.innerHTML = '<td><span class="rung-step has-text-white is-size-7" style="' + badgeColor + '">' + rung.rungIndex + '</span></td>' +
           '<td><span class="tag is-warning is-light monospace has-text-weight-bold"><i class="fa-regular fa-calendar-check mr-1"></i> ' + rung.targetDateStr + '</span></td>' +
           '<td><span class="monospace has-text-weight-bold has-text-light">' + b.issueCode + '</span> <span class="tag is-small ml-2 ' + tagClass + '">' + b.secType + '</span></td>' +
@@ -1050,7 +1091,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
         tbody.appendChild(tr);
       });
 
-      const avgLadderYield = totalCapital > 0 ? (weightedYieldSum / totalCapital) : 0;
+      const avgLadderYield = filledCapital > 0 ? (weightedYieldSum / filledCapital) : 0;
+      const filledCount = ladderSchedule.filter(r => r.selectedBond !== null).length;
 
       document.getElementById('stat-label-1').textContent = 'Overall Ladder Yield';
       document.getElementById('stat-val-1').innerHTML = '<span class="has-text-success">' + avgLadderYield.toFixed(2) + '% p.a.</span>';
@@ -1062,7 +1104,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       document.getElementById('stat-val-3').innerHTML = '<span class="has-text-info">+$' + Math.round(totalEstAnnualIncome).toLocaleString() + '</span>';
 
       document.getElementById('stat-label-4').textContent = 'Active Rungs';
-      document.getElementById('stat-val-4').textContent = ladderSchedule.length + ' Payouts';
+      document.getElementById('stat-val-4').textContent = filledCount + ' of ' + ladderSchedule.length + ' Payouts';
     }
 
     document.getElementById('ladder-start-date').onchange = buildBondLadder;
@@ -1442,11 +1484,11 @@ const HTML_CONTENT = `<!DOCTYPE html>
         const csvRows = ['Rung,TargetPayoutDate,Type,IssueCode,ISIN,MaturityDate,CouponSchedule,AllocatedCapital,IndicativeYield,EstAnnualIncome'];
         ladderSchedule.forEach(r => {
           const b = r.selectedBond;
-          const y = b.indicativeYield || 0;
-          const inc = (r.allocatedCapital * y) / 100;
+          const y = b ? (b.indicativeYield || 0) : 0;
+          const inc = b ? ((r.allocatedCapital * y) / 100) : 0;
           csvRows.push([
-            r.rungIndex, r.targetDateStr, b.secType, b.issueCode, b.isin,
-            b.maturityDate, b.couponSchedule, r.allocatedCapital, y + '%', inc
+            r.rungIndex, r.targetDateStr, b ? b.secType : 'No Issue', b ? b.issueCode : '-', b ? b.isin : '-',
+            b ? b.maturityDate : '-', b ? b.couponSchedule : '-', r.allocatedCapital, b ? (y + '%') : '-', inc
           ].map(x => '"' + (x ?? '') + '"').join(','));
         });
         const a = document.createElement('a');
