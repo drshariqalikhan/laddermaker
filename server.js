@@ -9,13 +9,72 @@ const BASE_MAS_URL = 'https://eservices.mas.gov.sg/statistics/api/v1/bondsandbil
 const SECONDARY_MARKET_URL = 'https://eservices.mas.gov.sg/statistics/fdanet/BondPricesAndYields.aspx';
 const YIELD_CURVE_URL = 'https://eservices.mas.gov.sg/statistics/fdanet/SgsBenchmarkIssuePrices.aspx';
 
-// 1. Scrape SGS Yield Curve from MAS (Strictly Yields < 20%)
+// Helper: Parse dates in "YYYY-MM-DD" or "DD MMM YYYY"
+function parseFlexibleDate(str) {
+  if (!str || str === '-' || str === 'N/A') return null;
+  const d = new Date(str);
+  if (!isNaN(d.getTime())) return d;
+
+  const parts = str.trim().split(/[\s\-]+/);
+  if (parts.length === 3) {
+    const months = { jan:0, feb:1, mar:2, apr:3, may:4, jun:5, jul:6, aug:7, sep:8, oct:9, nov:10, dec:11 };
+    const day = parseInt(parts[0], 10);
+    const mStr = parts[1].slice(0, 3).toLowerCase();
+    const year = parseInt(parts[2], 10);
+    if (!isNaN(day) && months[mStr] !== undefined && !isNaN(year)) {
+      return new Date(year, months[mStr], day);
+    }
+  }
+  return null;
+}
+
+// Helper: Format Date to "DD MMM YYYY"
+function formatDateStr(dateObj) {
+  if (!dateObj || isNaN(dateObj.getTime())) return '-';
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const day = String(dateObj.getDate()).padStart(2, '0');
+  return `${day} ${months[dateObj.getMonth()]} ${dateObj.getFullYear()}`;
+}
+
+// Helper: Linear Interpolation for Yield Curve based on duration (years)
+function calculateIndicativeYield(durationYears, curve) {
+  if (!curve || durationYears <= 0) return null;
+
+  const points = [
+    { years: 0.5, y: curve['6M'] },
+    { years: 1.0, y: curve['1Y'] },
+    { years: 2.0, y: curve['2Y'] },
+    { years: 5.0, y: curve['5Y'] },
+    { years: 10.0, y: curve['10Y'] },
+    { years: 15.0, y: curve['15Y'] },
+    { years: 20.0, y: curve['20Y'] },
+    { years: 30.0, y: curve['30Y'] },
+    { years: 50.0, y: curve['50Y'] }
+  ].filter(p => typeof p.y === 'number' && !isNaN(p.y) && p.y > 0);
+
+  if (!points.length) return null;
+
+  if (durationYears <= points[0].years) return points[0].y;
+  if (durationYears >= points[points.length - 1].years) return points[points.length - 1].y;
+
+  for (let i = 0; i < points.length - 1; i++) {
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    if (durationYears >= p1.years && durationYears <= p2.years) {
+      const slope = (p2.y - p1.y) / (p2.years - p1.years);
+      const interpolated = p1.y + slope * (durationYears - p1.years);
+      return parseFloat(interpolated.toFixed(2));
+    }
+  }
+
+  return null;
+}
+
+// 1. Scrape SGS Yield Curve from MAS
 async function getSGSYieldCurve() {
   try {
     const { data: html } = await axios.get(YIELD_CURVE_URL, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      },
+      headers: { 'User-Agent': 'Mozilla/5.0' },
       timeout: 10000
     });
 
@@ -24,48 +83,26 @@ async function getSGSYieldCurve() {
 
     $('tr').each((_, row) => {
       const rowText = $(row).text();
-      // Stop before entering the High/Low table
-      if (rowText.includes('High / Low') || rowText.includes('High/Low')) {
-        return false;
-      }
+      if (rowText.includes('High / Low') || rowText.includes('High/Low')) return false;
 
-      const cols = $(row)
-        .find('td')
-        .map((_, td) => $(td).text().trim().replace(/\s+/g, ' '))
-        .get();
-
-      // Find the column containing the date (e.g., "16 Oct 2026")
+      const cols = $(row).find('td').map((_, td) => $(td).text().trim().replace(/\s+/g, ' ')).get();
       const dateIndex = cols.findIndex(c => /^\d{1,2}\s+[A-Za-z]{3}\s+\d{4}$/.test(c));
       if (dateIndex === -1) return;
 
       const dateStr = cols[dateIndex];
-
-      // Extract all numbers after the date column
-      const allNums = cols.slice(dateIndex + 1)
-        .map(c => parseFloat(c))
-        .filter(n => !isNaN(n));
-
-      // Separate Yields (< 20%) from Prices (>= 50)
+      const allNums = cols.slice(dateIndex + 1).map(c => parseFloat(c)).filter(n => !isNaN(n));
       const yields = allNums.filter(n => n > 0 && n < 20);
 
-      // There are 9 benchmark tenors: 6M, 1Y, 2Y, 5Y, 10Y, 15Y, 20Y, 30Y, 50Y
       if (yields.length >= 9) {
         latestCurve = {
           date: dateStr,
-          '6M': yields[0],
-          '1Y': yields[1],
-          '2Y': yields[2],
-          '5Y': yields[3],
-          '10Y': yields[4],
-          '15Y': yields[5],
-          '20Y': yields[6],
-          '30Y': yields[7],
-          '50Y': yields[8]
+          '6M': yields[0], '1Y': yields[1], '2Y': yields[2],
+          '5Y': yields[3], '10Y': yields[4], '15Y': yields[5],
+          '20Y': yields[6], '30Y': yields[7], '50Y': yields[8]
         };
       }
     });
 
-    console.log('[Yield Curve Scraper] Parsed Benchmark Yields:', latestCurve);
     return latestCurve;
   } catch (err) {
     console.error('Error fetching yield curve:', err.message);
@@ -73,13 +110,11 @@ async function getSGSYieldCurve() {
   }
 }
 
-// 2. Scrape MAS Secondary Market Bonds
+// 2. Scrape Secondary Market Bonds
 async function scrapeMASSecondaryMarket() {
   try {
     const { data } = await axios.get(SECONDARY_MARKET_URL, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      },
+      headers: { 'User-Agent': 'Mozilla/5.0' },
       timeout: 10000
     });
 
@@ -90,10 +125,7 @@ async function scrapeMASSecondaryMarket() {
       const tds = $(tr).find('td');
       if (tds.length >= 9) {
         const row = [];
-        tds.each((_, td) => {
-          row.push($(td).text().replace(/\s+/g, ' ').trim());
-        });
-
+        tds.each((_, td) => row.push($(td).text().replace(/\s+/g, ' ').trim()));
         const issueCode = row[2];
         if (!issueCode || issueCode.length < 4) return;
 
@@ -120,7 +152,7 @@ async function scrapeMASSecondaryMarket() {
   }
 }
 
-// 3. Fetch MAS Primary Issuance Calendar API
+// 3. Fetch Primary MAS API
 function fetchMasApi(targetUrl) {
   return new Promise((resolve, reject) => {
     https.get(encodeURI(targetUrl), (res) => {
@@ -138,14 +170,104 @@ function fetchMasApi(targetUrl) {
   });
 }
 
-// 4. Frontend Application
+// 4. Build Master Table Logic
+async function getMasterTableData() {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const currentYear = today.getFullYear();
+  const nextYear = currentYear + 1;
+  const startDate = `${currentYear}-01-01`;
+  const endDate = `${nextYear}-12-31`;
+
+  const sgsUrl = `${BASE_MAS_URL}/issuancecalendar?rows=200&filters=issue_type:("B" OR "I" OR "G") AND ann_date:[${startDate} TO ${endDate}]&sort=ann_date asc`;
+  const tbillUrl = `${BASE_MAS_URL}/issuancecalendar?rows=200&filters=issue_type:"T" AND ann_date:[${startDate} TO ${endDate}]&sort=ann_date asc`;
+
+  const [sgsRecords, tbillRecords, secondaryBonds, yieldCurve] = await Promise.all([
+    fetchMasApi(sgsUrl),
+    fetchMasApi(tbillUrl),
+    scrapeMASSecondaryMarket(),
+    getSGSYieldCurve()
+  ]);
+
+  const masterList = [];
+
+  // A. Primary SGS & T-Bills (Auction Date >= Today)
+  const primaryAll = [
+    ...sgsRecords.map(r => ({ ...r, _secType: 'Primary SGS' })),
+    ...tbillRecords.map(r => ({ ...r, _secType: 'Primary T-Bill' }))
+  ];
+
+  primaryAll.forEach(r => {
+    const auctionDateObj = parseFlexibleDate(r.auction_date);
+    if (!auctionDateObj || auctionDateObj < today) return;
+
+    let matDateObj = parseFlexibleDate(r.maturity_date);
+    const issueDateObj = parseFlexibleDate(r.issue_date);
+
+    // Estimate maturity date from tenor if not explicitly listed
+    if (!matDateObj && issueDateObj && r.auction_tenor) {
+      const tenorYears = parseFloat(r.auction_tenor) || 0.5;
+      matDateObj = new Date(issueDateObj.getTime() + tenorYears * 365.25 * 86400000);
+    }
+
+    const durationYears = matDateObj ? Math.max(0.1, (matDateObj - today) / (365.25 * 86400000)) : (parseFloat(r.auction_tenor) || 0.5);
+    const indicativeYield = calculateIndicativeYield(durationYears, yieldCurve);
+
+    masterList.push({
+      secType: r._secType,
+      issueCode: r.issue_code || r.issue_name || '-',
+      isin: r.isin_code || '-',
+      maturityDate: matDateObj ? formatDateStr(matDateObj) : (r.maturity_date || '-'),
+      maturityTimestamp: matDateObj ? matDateObj.getTime() : 0,
+      auctionDate: formatDateStr(auctionDateObj),
+      auctionTimestamp: auctionDateObj.getTime(),
+      issueDate: issueDateObj ? formatDateStr(issueDateObj) : (r.issue_date || '-'),
+      durationYears: parseFloat(durationYears.toFixed(2)),
+      indicativeYield: indicativeYield !== null ? indicativeYield : null
+    });
+  });
+
+  // B. Secondary Market Bonds (Maturity Date > Today)
+  secondaryBonds.forEach(b => {
+    const matDateObj = parseFlexibleDate(b.maturityDate);
+    if (!matDateObj || matDateObj <= today) return;
+
+    const durationYears = Math.max(0.1, (matDateObj - today) / (365.25 * 86400000));
+    const indicativeYield = calculateIndicativeYield(durationYears, yieldCurve);
+
+    masterList.push({
+      secType: 'Secondary SGS',
+      issueCode: b.issueCode,
+      isin: b.isin || '-',
+      maturityDate: formatDateStr(matDateObj),
+      maturityTimestamp: matDateObj.getTime(),
+      auctionDate: '-',
+      auctionTimestamp: 0,
+      issueDate: b.interestDate1 ? `Int: ${b.interestDate1}, ${b.interestDate2}` : '-',
+      durationYears: parseFloat(durationYears.toFixed(2)),
+      indicativeYield: indicativeYield !== null ? indicativeYield : (parseFloat(b.yieldPct) || null)
+    });
+  });
+
+  // Sort chronologically by maturity date
+  masterList.sort((a, b) => (a.maturityTimestamp || 0) - (b.maturityTimestamp || 0));
+
+  return {
+    curveDate: yieldCurve?.date || 'Latest',
+    count: masterList.length,
+    records: masterList
+  };
+}
+
+// 5. Frontend HTML
 const HTML_CONTENT = `<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#12161a">
-  <title>LadderMaker - SGS Issuances, Secondary Market & Yield Curve</title>
+  <title>LadderMaker - Master Table, SGS & Yield Curve</title>
   
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.2/css/bulma.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -187,7 +309,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
     </div>
   </nav>
 
-  <!-- Main Content -->
   <main class="section main-container">
     <div class="container">
 
@@ -196,7 +317,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         <div class="level-left">
           <div>
             <h1 class="title is-4 has-text-light" id="page-title">Singapore Government Securities</h1>
-            <p class="subtitle is-6 has-text-grey" id="page-subtitle">Track primary auctions, secondary market prices, and benchmark yield curves</p>
+            <p class="subtitle is-6 has-text-grey" id="page-subtitle">Track primary auctions, secondary market bonds, and indicative yield curve interpolation</p>
           </div>
         </div>
         <div class="level-right">
@@ -211,26 +332,26 @@ const HTML_CONTENT = `<!DOCTYPE html>
       <div class="columns is-multiline mb-4" id="metrics-panel">
         <div class="column is-3">
           <div class="box summary-card py-3">
-            <p class="heading has-text-grey" id="stat-label-1">Total Items</p>
+            <p class="heading has-text-grey" id="stat-label-1">Total Available</p>
             <p class="title is-4 has-text-light" id="stat-val-1">0</p>
           </div>
         </div>
         <div class="column is-3">
           <div class="box summary-card py-3">
-            <p class="heading has-text-grey" id="stat-label-2">Metric 2</p>
+            <p class="heading has-text-grey" id="stat-label-2">Primary Auctions</p>
             <p class="title is-4 has-text-primary" id="stat-val-2">0</p>
           </div>
         </div>
         <div class="column is-3">
           <div class="box summary-card py-3">
-            <p class="heading has-text-grey" id="stat-label-3">Metric 3</p>
-            <p class="title is-4 has-text-info" id="stat-val-3">0</p>
+            <p class="heading has-text-grey" id="stat-label-3">Secondary Bonds</p>
+            <p class="title is-4 has-text-warning" id="stat-val-3">0</p>
           </div>
         </div>
         <div class="column is-3">
           <div class="box summary-card py-3">
-            <p class="heading has-text-grey" id="stat-label-4">Metric 4</p>
-            <p class="title is-4 has-text-success" id="stat-val-4">0</p>
+            <p class="heading has-text-grey" id="stat-label-4">Curve Source Date</p>
+            <p class="title is-4 has-text-success monospace" id="stat-val-4">-</p>
           </div>
         </div>
       </div>
@@ -240,11 +361,12 @@ const HTML_CONTENT = `<!DOCTYPE html>
         <div class="level-left">
           <div class="tabs is-boxed is-small mb-0" id="category-tabs">
             <ul>
-              <li class="is-active" data-type="all"><a><i class="fa-solid fa-list mr-2"></i> All Primary</a></li>
-              <li data-type="sgs"><a><i class="fa-solid fa-building-columns mr-2"></i> SGS Bonds</a></li>
-              <li data-type="tbill"><a><i class="fa-solid fa-money-bill-trend-up mr-2"></i> T-Bills</a></li>
+              <li class="is-active" data-type="master"><a><i class="fa-solid fa-layer-group mr-2 has-text-warning"></i> Master Table</a></li>
+              <li data-type="all"><a><i class="fa-solid fa-list mr-2"></i> All Primary</a></li>
+              <li data-type="sgs"><a><i class="fa-solid fa-building-columns mr-2"></i> Primary SGS</a></li>
+              <li data-type="tbill"><a><i class="fa-solid fa-money-bill-trend-up mr-2"></i> Primary T-Bills</a></li>
               <li data-type="ssb"><a><i class="fa-solid fa-piggy-bank mr-2"></i> SSB</a></li>
-              <li data-type="secondary"><a><i class="fa-solid fa-chart-line mr-2 has-text-warning"></i> Secondary Market</a></li>
+              <li data-type="secondary"><a><i class="fa-solid fa-chart-line mr-2"></i> Secondary Market</a></li>
               <li data-type="curve"><a><i class="fa-solid fa-bezier-curve mr-2 has-text-danger"></i> Yield Curve</a></li>
             </ul>
           </div>
@@ -260,10 +382,10 @@ const HTML_CONTENT = `<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- Search Box (Hidden in Yield Curve view) -->
+      <!-- Search Box -->
       <div class="field mb-4" id="search-wrapper">
         <p class="control has-icons-left">
-          <input id="search-input" class="input is-rounded is-dark" type="text" placeholder="Search by issue code, ISIN, benchmark, date...">
+          <input id="search-input" class="input is-rounded is-dark" type="text" placeholder="Search by issue code, ISIN, maturity date, yield...">
           <span class="icon is-small is-left"><i class="fas fa-search"></i></span>
         </p>
       </div>
@@ -274,7 +396,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         <p class="mt-3 has-text-grey" id="status-text">Fetching data from MAS...</p>
       </div>
 
-      <!-- Standard Table Section -->
+      <!-- Master / Standard Table Section -->
       <div id="table-wrapper" class="table-container is-hidden">
         <table class="table is-fullwidth is-hoverable is-narrow">
           <thead><tr id="table-head-row"></tr></thead>
@@ -323,18 +445,19 @@ const HTML_CONTENT = `<!DOCTYPE html>
   </main>
 
   <script>
-    let currentType = 'all';
+    let currentType = 'master';
     let currentYear = new Date().getFullYear();
     let allRecords = [];
     let displayedRecords = [];
     let yieldCurveData = null;
+    let masterMeta = null;
     let sortColumn = null;
     let sortAsc = true;
 
     // 1. Initialize PWA
     (function initPWA() {
       const manifest = {
-        name: "LadderMaker - SGS Suite",
+        name: "LadderMaker - SGS Master Suite",
         short_name: "LadderMaker",
         start_url: "./",
         display: "standalone",
@@ -368,10 +491,11 @@ const HTML_CONTENT = `<!DOCTYPE html>
     async function loadData() {
       showLoading(true);
 
-      const isSecondary = currentType === 'secondary';
+      const isMaster = currentType === 'master';
       const isCurve = currentType === 'curve';
+      const isSecondary = currentType === 'secondary';
 
-      document.getElementById('year-wrapper').style.visibility = (isSecondary || isCurve) ? 'hidden' : 'visible';
+      document.getElementById('year-wrapper').style.visibility = (isMaster || isSecondary || isCurve) ? 'hidden' : 'visible';
       document.getElementById('search-wrapper').classList.toggle('is-hidden', isCurve);
 
       try {
@@ -379,6 +503,18 @@ const HTML_CONTENT = `<!DOCTYPE html>
           const res = await axios.get('/api/yield-curve');
           yieldCurveData = res.data;
           renderYieldCurveView();
+        } else if (isMaster) {
+          const res = await axios.get('/api/master');
+          masterMeta = res.data;
+          allRecords = res.data.records || [];
+          displayedRecords = [...allRecords];
+
+          document.getElementById('curve-wrapper').classList.add('is-hidden');
+          document.getElementById('table-wrapper').classList.remove('is-hidden');
+
+          updateMasterMetrics();
+          renderMasterHeaders();
+          renderMasterBody();
         } else {
           const endpoint = isSecondary 
             ? '/api/secondary-market'
@@ -391,9 +527,9 @@ const HTML_CONTENT = `<!DOCTYPE html>
           document.getElementById('curve-wrapper').classList.add('is-hidden');
           document.getElementById('table-wrapper').classList.remove('is-hidden');
 
-          updateMetrics(isSecondary);
-          renderHeaders(isSecondary);
-          renderBody(isSecondary);
+          updateStandardMetrics(isSecondary);
+          renderStandardHeaders(isSecondary);
+          renderStandardBody(isSecondary);
         }
 
         showLoading(false);
@@ -404,7 +540,94 @@ const HTML_CONTENT = `<!DOCTYPE html>
       }
     }
 
-    // 3. Render Yield Curve View
+    // 3. Render Master Table (6 Specific Columns Requested)
+    function updateMasterMetrics() {
+      document.getElementById('stat-label-1').textContent = 'Total Valid Issues';
+      document.getElementById('stat-val-1').textContent = allRecords.length;
+
+      document.getElementById('stat-label-2').textContent = 'Primary Auctions';
+      const primaryCount = allRecords.filter(r => r.secType && r.secType.startsWith('Primary')).length;
+      document.getElementById('stat-val-2').textContent = primaryCount;
+
+      document.getElementById('stat-label-3').textContent = 'Secondary Bonds';
+      const secCount = allRecords.filter(r => r.secType === 'Secondary SGS').length;
+      document.getElementById('stat-val-3').textContent = secCount;
+
+      document.getElementById('stat-label-4').textContent = 'Curve Benchmark Date';
+      document.getElementById('stat-val-4').textContent = masterMeta?.curveDate || '-';
+    }
+
+    function renderMasterHeaders() {
+      const row = document.getElementById('table-head-row');
+      row.innerHTML = '';
+
+      const cols = [
+        { id: 'issueCode', title: 'COL 1: ISSUE CODE' },
+        { id: 'isin', title: 'COL 2: ISIN' },
+        { id: 'maturityDate', title: 'COL 3: MATURITY DATE' },
+        { id: 'auctionDate', title: 'COL 4: AUCTION DATE (IF PRIMARY)' },
+        { id: 'issueDate', title: 'COL 5: ISSUE DATE' },
+        { id: 'indicativeYield', title: 'COL 6: INDICATIVE YIELD (% P.A.)' }
+      ];
+
+      cols.forEach(c => {
+        const th = document.createElement('th');
+        th.innerHTML = '<span>' + c.title + '</span> <i class="fa-solid fa-sort ml-1 has-text-grey-dark"></i>';
+        th.onclick = () => {
+          sortAsc = sortColumn === c.id ? !sortAsc : true;
+          sortColumn = c.id;
+          displayedRecords.sort((a, b) => {
+            const vA = a[c.id] ?? '';
+            const vB = b[c.id] ?? '';
+            if (typeof vA === 'number' && typeof vB === 'number') {
+              return sortAsc ? vA - vB : vB - vA;
+            }
+            return sortAsc ? String(vA).localeCompare(String(vB)) : String(vB).localeCompare(String(vA));
+          });
+          renderMasterBody();
+        };
+        row.appendChild(th);
+      });
+    }
+
+    function renderMasterBody() {
+      const tbody = document.getElementById('table-body');
+      tbody.innerHTML = '';
+      if (!displayedRecords.length) {
+        document.getElementById('empty-state').classList.remove('is-hidden');
+        return;
+      }
+      document.getElementById('empty-state').classList.add('is-hidden');
+
+      displayedRecords.forEach(r => {
+        const tr = document.createElement('tr');
+
+        // Col 1: Issue Code + Tag
+        const tagClass = r.secType === 'Primary SGS' ? 'is-primary' : (r.secType === 'Primary T-Bill' ? 'is-info' : 'is-warning');
+        const col1 = '<td><span class="monospace has-text-weight-bold has-text-light">' + r.issueCode + '</span> <span class="tag is-small ml-2 ' + tagClass + '">' + r.secType + '</span></td>';
+
+        // Col 2: ISIN
+        const col2 = '<td><span class="monospace has-text-grey-light">' + (r.isin || '-') + '</span></td>';
+
+        // Col 3: Maturity Date
+        const col3 = '<td class="has-text-weight-medium">' + r.maturityDate + '</td>';
+
+        // Col 4: Auction Date (if primary)
+        const col4 = '<td>' + (r.auctionDate !== '-' ? '<span class="has-text-info monospace"><i class="fa-regular fa-calendar-check mr-1"></i>' + r.auctionDate + '</span>' : '<span class="has-text-grey">-</span>') + '</td>';
+
+        // Col 5: Issue Date
+        const col5 = '<td class="has-text-grey-light">' + r.issueDate + '</td>';
+
+        // Col 6: Indicative Yield
+        const yieldVal = r.indicativeYield !== null ? r.indicativeYield.toFixed(2) + '%' : '<span class="has-text-grey">-</span>';
+        const col6 = '<td><span class="tag is-success is-light monospace has-text-weight-bold is-medium">' + yieldVal + '</span> <span class="is-size-7 has-text-grey ml-1">(' + r.durationYears + 'Y)</span></td>';
+
+        tr.innerHTML = col1 + col2 + col3 + col4 + col5 + col6;
+        tbody.appendChild(tr);
+      });
+    }
+
+    // 4. Render Yield Curve View
     function renderYieldCurveView() {
       document.getElementById('table-wrapper').classList.add('is-hidden');
       document.getElementById('curve-wrapper').classList.remove('is-hidden');
@@ -465,11 +688,9 @@ const HTML_CONTENT = `<!DOCTYPE html>
       });
     }
 
-    // Render SVG Yield Curve
     function renderSvgCurve(tenors) {
       const svg = document.getElementById('curve-svg');
       svg.innerHTML = '';
-
       if (!tenors.length) return;
 
       const w = 800, h = 280;
@@ -484,10 +705,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
       const getX = (idx) => padL + (idx / Math.max(1, tenors.length - 1)) * chartW;
       const getY = (val) => padT + chartH - ((val - minVal) / Math.max(0.01, maxVal - minVal)) * chartH;
 
-      // Grid Lines
-      const gridSteps = 4;
-      for (let i = 0; i <= gridSteps; i++) {
-        const yVal = minVal + (i / gridSteps) * (maxVal - minVal);
+      for (let i = 0; i <= 4; i++) {
+        const yVal = minVal + (i / 4) * (maxVal - minVal);
         const yPos = getY(yVal);
 
         const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
@@ -509,7 +728,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
         svg.appendChild(text);
       }
 
-      // Area fill
       let areaPathD = 'M ' + getX(0) + ' ' + (padT + chartH) + ' ';
       for (let i = 0; i < tenors.length; i++) {
         areaPathD += 'L ' + getX(i) + ' ' + getY(tenors[i].val) + ' ';
@@ -517,10 +735,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       areaPathD += 'L ' + getX(tenors.length - 1) + ' ' + (padT + chartH) + ' Z';
 
       const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-      defs.innerHTML = '<linearGradient id="curveGrad" x1="0" y1="0" x2="0" y2="1">' +
-        '<stop offset="0%" stop-color="#58a6ff" stop-opacity="0.35"/>' +
-        '<stop offset="100%" stop-color="#58a6ff" stop-opacity="0.0"/>' +
-        '</linearGradient>';
+      defs.innerHTML = '<linearGradient id="curveGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#58a6ff" stop-opacity="0.35"/><stop offset="100%" stop-color="#58a6ff" stop-opacity="0.0"/></linearGradient>';
       svg.appendChild(defs);
 
       const area = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -528,7 +743,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
       area.setAttribute('fill', 'url(#curveGrad)');
       svg.appendChild(area);
 
-      // Curve line
       let linePathD = '';
       for (let i = 0; i < tenors.length; i++) {
         linePathD += (i === 0 ? 'M ' : 'L ') + getX(i) + ' ' + getY(tenors[i].val) + ' ';
@@ -541,7 +755,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
       path.setAttribute('stroke-width', '3');
       svg.appendChild(path);
 
-      // Points & Labels
       tenors.forEach((t, i) => {
         const cx = getX(i);
         const cy = getY(t.val);
@@ -577,35 +790,30 @@ const HTML_CONTENT = `<!DOCTYPE html>
       });
     }
 
-    // 4. Update Metrics for Standard Tables
-    function updateMetrics(isSecondary) {
+    // 5. Standard Tab Handlers (All, Primary, Secondary)
+    function updateStandardMetrics(isSecondary) {
       document.getElementById('stat-label-1').textContent = 'Securities Listed';
       document.getElementById('stat-val-1').textContent = allRecords.length;
 
       if (isSecondary) {
         document.getElementById('stat-label-2').textContent = 'Benchmark Bonds';
         document.getElementById('stat-val-2').textContent = allRecords.filter(r => r.benchmark && r.benchmark !== '-').length;
-
         document.getElementById('stat-label-3').textContent = 'With Bid Price';
         document.getElementById('stat-val-3').textContent = allRecords.filter(r => r.bidPrice && r.bidPrice !== '-').length;
-
         document.getElementById('stat-label-4').textContent = 'Total Size (S$M)';
         const totalSize = allRecords.reduce((acc, r) => acc + (parseFloat(r.issueSizeMillion) || 0), 0);
         document.getElementById('stat-val-4').textContent = totalSize ? '$' + Math.round(totalSize).toLocaleString() : 'N/A';
       } else {
         document.getElementById('stat-label-2').textContent = 'SGS Bonds';
         document.getElementById('stat-val-2').textContent = allRecords.filter(r => r._category === 'SGS Bond').length;
-
         document.getElementById('stat-label-3').textContent = 'T-Bills';
         document.getElementById('stat-val-3').textContent = allRecords.filter(r => r._category === 'T-Bill').length;
-
         document.getElementById('stat-label-4').textContent = 'SSB Issues';
         document.getElementById('stat-val-4').textContent = allRecords.filter(r => r._category === 'SSB').length;
       }
     }
 
-    // 5. Render Table Headers
-    function renderHeaders(isSecondary) {
+    function renderStandardHeaders(isSecondary) {
       const row = document.getElementById('table-head-row');
       row.innerHTML = '';
       if (!allRecords.length) return;
@@ -623,19 +831,17 @@ const HTML_CONTENT = `<!DOCTYPE html>
         if (k === 'yieldPct') label = 'CLOSING YIELD';
         
         th.innerHTML = '<span>' + label + '</span> <i class="fa-solid fa-sort ml-1 has-text-grey-dark"></i>';
-        
         th.onclick = () => {
           sortAsc = sortColumn === k ? !sortAsc : true;
           sortColumn = k;
           displayedRecords.sort((a, b) => sortAsc ? String(a[k] ?? '').localeCompare(String(b[k] ?? '')) : String(b[k] ?? '').localeCompare(String(a[k] ?? '')));
-          renderBody(isSecondary);
+          renderStandardBody(isSecondary);
         };
         row.appendChild(th);
       });
     }
 
-    // 6. Render Table Body
-    function renderBody(isSecondary) {
+    function renderStandardBody(isSecondary) {
       const tbody = document.getElementById('table-body');
       tbody.innerHTML = '';
       if (!displayedRecords.length) {
@@ -653,9 +859,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
         keys.forEach(k => {
           const td = document.createElement('td');
           const val = r[k] ?? '-';
-
           if (k === '_category') {
-            const badgeClass = val === 'SGS Bond' ? 'is-primary' : val === 'T-Bill' ? 'is-info' : 'is-success';
+            const badgeClass = val === 'SGS Bond' ? 'is-primary' : (val === 'T-Bill' ? 'is-info' : 'is-success');
             td.innerHTML = '<span class="tag is-small ' + badgeClass + '">' + val + '</span>';
           } else if (k === 'benchmark' && val !== '-') {
             td.innerHTML = '<span class="tag is-small is-warning is-light has-text-weight-bold">' + val + '</span>';
@@ -675,7 +880,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       });
     }
 
-    // 7. Navigation Tabs
+    // 6. Navigation Tabs
     document.querySelectorAll('#category-tabs li').forEach(tab => {
       tab.onclick = () => {
         document.querySelectorAll('#category-tabs li').forEach(t => t.classList.remove('is-active'));
@@ -693,13 +898,34 @@ const HTML_CONTENT = `<!DOCTYPE html>
     document.getElementById('search-input').oninput = (e) => {
       const q = e.target.value.toLowerCase().trim();
       displayedRecords = allRecords.filter(r => Object.values(r).some(v => String(v).toLowerCase().includes(q)));
-      renderBody(currentType === 'secondary');
+      if (currentType === 'master') {
+        renderMasterBody();
+      } else {
+        renderStandardBody(currentType === 'secondary');
+      }
     };
 
-    // 8. Refresh & CSV Export
+    // 7. Refresh & CSV Export
     document.getElementById('btn-refresh').onclick = loadData;
 
     document.getElementById('btn-export').onclick = () => {
+      if (currentType === 'master') {
+        if (!displayedRecords.length) return;
+        const csvRows = ['Type,IssueCode,ISIN,MaturityDate,AuctionDate,IssueDate,DurationYears,IndicativeYield'];
+        displayedRecords.forEach(r => {
+          csvRows.push([
+            r.secType, r.issueCode, r.isin, r.maturityDate,
+            r.auctionDate, r.issueDate, r.durationYears,
+            r.indicativeYield !== null ? r.indicativeYield + '%' : ''
+          ].map(x => '"' + (x ?? '') + '"').join(','));
+        });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([csvRows.join('\\n')], { type: 'text/csv' }));
+        a.download = 'mas_sgs_master_table.csv';
+        a.click();
+        return;
+      }
+
       if (currentType === 'curve' && yieldCurveData) {
         const c = yieldCurveData;
         const csvRows = ['Tenor,Yield (% p.a.),AsOfDate'];
@@ -741,11 +967,20 @@ const HTML_CONTENT = `<!DOCTYPE html>
 </body>
 </html>`;
 
-// 5. Backend HTTP Router
+// 6. HTTP Router
 const server = http.createServer(async (req, res) => {
   const parsedUrl = url.parse(req.url, true);
 
-  if (parsedUrl.pathname === '/api/yield-curve') {
+  if (parsedUrl.pathname === '/api/master') {
+    try {
+      const data = await getMasterTableData();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(data));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  } else if (parsedUrl.pathname === '/api/yield-curve') {
     const curve = await getSGSYieldCurve();
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(curve));
